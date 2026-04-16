@@ -4,7 +4,7 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 
 ## Features
 
-### 14 Tools for Complete Project Management
+### 15 Tools for Complete Project Management
 
 | Category | Tool | Description |
 |----------|------|-------------|
@@ -12,16 +12,19 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 | | `create_file` | Add new files to existing projects |
 | **Read** | `list_projects` | View all configured projects |
 | | `list_files` | List files with optional extension filter |
-| | `read_file` | Read file contents |
+| | `read_file` | Read file contents (bounded by `max_bytes`, default 200k) |
 | | `get_sections` | Parse LaTeX structure (chapters, sections, subsections) |
 | | `get_section_content` | Get full content of a specific section |
-| | `list_history` | View git commit history |
-| | `get_diff` | Compare changes between versions |
-| **Update** | `edit_file` | **Surgical edit** - replace specific text (old_string → new_string) |
+| | `list_history` | View git commit history (filterable by path, date) |
+| | `get_diff` | Compare versions — `unified` / `stat` / `name-only` modes |
+| | `status_summary` | One-call project overview (files + last commit + section tree) |
+| **Update** | `edit_file` | **Surgical edit** — replace specific text (old_string → new_string) |
 | | `rewrite_file` | Replace entire file contents |
 | | `update_section` | Update a specific LaTeX section by title |
-| | `sync_project` | Pull latest changes from Overleaf |
+| | `sync_project` | Force-pull latest changes from Overleaf (bypasses TTL cache) |
 | **Delete** | `delete_file` | Remove files from projects |
+
+For the full per-tool parameter reference, see [`docs/API.md`](docs/API.md).
 
 ### Key Capabilities
 
@@ -31,9 +34,13 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 - **Auto-Push**: All write operations commit and push to Overleaf immediately
 - **Local Caching**: Fast access with local repository cache
 - **TTL-Cached Pulls**: Read-only tools reuse a fresh local snapshot for `OVERLEAF_PULL_TTL` seconds (default 30s) — an agent exploring a project pays ~1 network round-trip per burst, not per tool call
+- **Reader-Writer Concurrency**: Multiple read tools against the same project run in parallel; writers (commit/push) take exclusive access. Per-project serialization, not global.
 - **Non-Blocking**: All Git/subprocess work runs off the asyncio event loop, so a slow push never stalls the MCP stdio reader
 - **Bounded Hangs**: Every Git op has a hard timeout ceiling (`OVERLEAF_GIT_TIMEOUT`, default 60s) — a wedged connection can no longer freeze the server indefinitely
+- **Transient-Failure Retry**: Pull failures that look transient (connection reset, HTTP 5xx, DNS blip) get one transparent retry with a short random back-off. Auth/ref errors fail fast (no wasted round-trip).
 - **Visible Staleness**: If a refresh attempt fails but a local snapshot is available, the tool response appends a `⚠ could not refresh from Overleaf: ...` warning instead of silently serving stale data
+- **Opt-In Structured Envelope**: Set `OVERLEAF_STRUCTURED=1` to append `<mcp-envelope>{"ok":bool,"warnings":[...]}</mcp-envelope>` to every tool response — gives agentic clients a reliable parse target. Off by default; plain-text clients unaffected.
+- **Opt-In Timing Logs**: Set `OVERLEAF_TIMING=1` to emit a per-tool `acquire_project project=... mode=... elapsed_ms=... stale=...` INFO log line on every call — useful for latency regressions and tuning the TTL.
 
 ---
 
@@ -88,7 +95,8 @@ The bundle embeds Python dependencies (`mcp`, `fastmcp`, `gitpython`,
 `pydantic`) but not the Python interpreter itself or `git` — both must
 still be on the user's PATH. See `manifest.json` for the install-time
 config fields (cache dir, Git token, etc.) that Claude Desktop surfaces
-as a native form.
+as a native form. Claude Desktop stores the Git token in the OS keychain
+(the field is marked `sensitive: true` in the manifest).
 
 ---
 
@@ -297,6 +305,7 @@ Once configured, you can ask the AI assistant:
 | `OVERLEAF_SHALLOW_CLONE` | `0` | Set to `1` to use shallow clones (`--depth=N`) for new projects. Dramatically reduces cold-start time and disk usage for multi-GB projects, at the cost of limiting `list_history` to the shallow depth. |
 | `OVERLEAF_SHALLOW_DEPTH` | `1` | Depth for shallow clones. Ignored when `OVERLEAF_SHALLOW_CLONE=0`. |
 | `OVERLEAF_STRUCTURED` | `0` | Set to `1` to append `<mcp-envelope>{"ok":bool,"warnings":[...]}</mcp-envelope>` to every tool response. Useful for agentic clients that want a reliable parse target; off by default so plain-text clients are unaffected. |
+| `OVERLEAF_TIMING` | `0` | Set to `1` to emit one structured `acquire_project project=... mode=... elapsed_ms=... stale=...` INFO log line per tool call. Zero cost when off (single env lookup). Useful for latency debugging and tuning `OVERLEAF_PULL_TTL`. |
 | `GIT_HTTP_LOW_SPEED_LIMIT` | `1000` | Bytes/sec floor — Git aborts if throughput drops below this. |
 | `GIT_HTTP_LOW_SPEED_TIME` | `30` | Seconds that throughput must stay below the limit before aborting. |
 
@@ -337,6 +346,21 @@ staleness impossible — callers always know whether data is live or cached.
 3. **Commit/Push**: Changes are committed and pushed back to Overleaf
 4. **Real-time Sync**: Overleaf reflects changes immediately in the web editor
 
+### Module Layout
+
+```
+src/overleaf_mcp/
+├── server.py     transport layer (FastMCP 3.x) — tiny by design
+├── tools.py      15 async tool implementations + dispatcher shim
+├── git_ops.py    clone/pull, RW lock, TTL cache, timeouts, retry
+├── latex.py      pure LaTeX section parser (re-usable, no I/O)
+├── config.py     pydantic models + config-file / env-var loading
+└── __init__.py   version
+```
+
+For a deeper walk-through of the refresh/lock/envelope pipeline, see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ---
 
 ## Security Notes
@@ -368,11 +392,37 @@ staleness impossible — callers always know whether data is live or cached.
 - Check the config JSON is valid (no trailing commas)
 - Verify Python path is correct (use absolute path to venv)
 
+### "⚠ could not refresh from Overleaf" in a tool response
+- This is a **soft warning**, not a failure. The tool served its response
+  against the last-good local snapshot instead of aborting.
+- One transparent retry already ran — the underlying error is persistent
+  across a short delay (network outage, auth revoked, server 5xx).
+- Call `sync_project` explicitly to see the hard error and diagnose.
+
+### Latency debugging
+- Set `OVERLEAF_TIMING=1` to get per-tool `acquire_project project=... mode=... elapsed_ms=... stale=...` INFO lines.
+- If every tool shows >1s elapsed, check `OVERLEAF_PULL_TTL` — the default 30s means bursts of read calls pay one pull; setting it to `0` forces a pull per call.
+- `mode=read` calls should run in parallel (reader-writer lock). `mode=write` calls serialize — one push at a time, by design.
+
+---
+
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| [`README.md`](README.md) | Install, configure, usage (this file) |
+| [`docs/API.md`](docs/API.md) | Per-tool parameter/return reference |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Module layers, request lifecycle, locking, caching |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Dev setup, testing, lint/type, release flow |
+| [`CHANGELOG.md`](CHANGELOG.md) | Version-by-version change log |
+
 ---
 
 ## Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request.
+Contributions are welcome! See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+for the dev setup, test commands, and module boundaries. Please open an
+issue before starting non-trivial work.
 
 ---
 
