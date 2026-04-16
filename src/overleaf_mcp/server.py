@@ -122,6 +122,21 @@ def get_project_config(project_name: str | None = None) -> ProjectConfig:
     return config.projects[project_name]
 
 
+def resolve_project(
+    project_name: str | None = None,
+    git_token: str | None = None,
+    project_id: str | None = None,
+) -> ProjectConfig:
+    """Resolve project config from inline credentials or config file."""
+    if git_token or project_id:
+        if not (git_token and project_id):
+            raise ValueError(
+                "Inline credentials require both 'git_token' and 'project_id'"
+            )
+        return ProjectConfig(name="inline", project_id=project_id, git_token=git_token)
+    return get_project_config(project_name)
+
+
 def get_repo_path(project_id: str) -> Path:
     """Get the local repository path for a project."""
     return Path(TEMP_DIR) / project_id
