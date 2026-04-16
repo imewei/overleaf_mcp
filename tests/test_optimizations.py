@@ -596,6 +596,83 @@ def test_acquire_project_writers_still_serialize(
     asyncio.run(_run())
 
 
+# ---------------------------------------------------------------------------
+# read_file max_bytes guardrail
+# ---------------------------------------------------------------------------
+
+
+def test_read_file_schema_has_max_bytes():
+    """The read_file tool schema MUST expose a max_bytes parameter.
+
+    Mirrors get_diff's existing max_output_chars guardrail — the asymmetry
+    of letting read_file return arbitrarily large blobs is what v2 closes.
+    """
+    from overleaf_mcp.tools import list_tools
+
+    tools = asyncio.run(list_tools())
+    rf = next(t for t in tools if t.name == "read_file")
+    props = rf.inputSchema["properties"]
+    assert "max_bytes" in props, (
+        f"read_file is missing max_bytes; properties present: {list(props)}"
+    )
+
+
+def test_read_file_truncates_oversized_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A file larger than max_bytes MUST be truncated with a visible marker."""
+    from overleaf_mcp.tools import read_file as read_file_tool
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    repo_dir = tmp_path / "p123"
+    repo_dir.mkdir()
+    big = repo_dir / "big.tex"
+    big.write_text("X" * 5000)
+
+    fake_repo = _make_fake_repo()
+    with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+        result = asyncio.run(
+            read_file_tool(
+                file_path="big.tex",
+                git_token="t",
+                project_id="p123",
+                max_bytes=1000,
+            )
+        )
+
+    # The truncated content fits under the limit; the marker is appended.
+    assert "[file truncated" in result
+    # Original 5000 chars must NOT all appear in output
+    assert result.count("X") < 5000
+
+
+def test_read_file_returns_full_content_under_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A file smaller than max_bytes MUST be returned in full with no marker."""
+    from overleaf_mcp.tools import read_file as read_file_tool
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    repo_dir = tmp_path / "p123"
+    repo_dir.mkdir()
+    small = repo_dir / "small.tex"
+    small.write_text("hello world")
+
+    fake_repo = _make_fake_repo()
+    with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+        result = asyncio.run(
+            read_file_tool(
+                file_path="small.tex",
+                git_token="t",
+                project_id="p123",
+                max_bytes=1000,
+            )
+        )
+
+    assert "hello world" in result
+    assert "[file truncated" not in result
+
+
 def test_acquire_project_default_mode_is_read(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

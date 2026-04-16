@@ -259,6 +259,18 @@ async def list_files(
 
 async def read_file(
     file_path: Annotated[str, Field(description="Path to the file within the project")],
+    max_bytes: Annotated[
+        int,
+        Field(
+            description=(
+                "Truncate file output to this many bytes (default: 200000, "
+                "ceiling: 2000000). Mirrors get_diff's max_output_chars: "
+                "guards against multi-MB .tex/.bib files flooding the "
+                "agent context window. Truncation is marked with "
+                "[file truncated at N bytes]."
+            )
+        ),
+    ] = 200000,
     project_name: _ProjectName = None,
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
@@ -266,6 +278,8 @@ async def read_file(
     """Read the content of a file from an Overleaf project."""
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
+    # Clamp to a sane band — same defensive pattern as get_diff.
+    max_bytes = max(1000, min(2_000_000, max_bytes))
 
     async with acquire_project(project, force_pull=False) as ctx:
         target_path = validate_path(repo_path, file_path)
@@ -274,7 +288,14 @@ async def read_file(
             return ctx.wrap(f"Error: File '{file_path}' not found")
 
         content = target_path.read_text()
-        return ctx.wrap(f"Content of '{file_path}':\n\n{content}")
+        truncated = len(content) > max_bytes
+        if truncated:
+            content = content[:max_bytes]
+
+        body = f"Content of '{file_path}':\n\n{content}"
+        if truncated:
+            body += f"\n\n[file truncated at {max_bytes} bytes]"
+        return ctx.wrap(body)
 
 
 async def get_sections(
