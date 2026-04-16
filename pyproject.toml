@@ -73,9 +73,22 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.10"
-# GitPython is unhyped upstream; propagating Any through dispatcher branches
-# is unavoidable without wrapper types. Keep mypy honest but don't require
-# --strict until the Tier-1 module split lands.
+# Default (non-strict) mypy is clean for our own code. --strict is also
+# clean when run with this config — see the scoped overrides below.
 warn_unused_ignores = true
 check_untyped_defs = true
+# NOT a global ignore_missing_imports — pydantic v2 ships with its own
+# type info, and accepting Any for its symbols would defeat strict checks
+# like "Class cannot subclass Any (pydantic.BaseModel)". Libraries that
+# genuinely lack stubs are silenced per-module below.
+
+[[tool.mypy.overrides]]
+# Libraries without published type stubs. Each has a brief rationale so
+# future maintainers know why it's listed (and can remove the entry if
+# the upstream library starts shipping stubs).
+module = [
+    "git.*",       # GitPython is entirely untyped — propagates Any throughout git_ops.
+    "mcp.*",       # MCP SDK has partial stubs that don't cover Server/stdio_server.
+    "fastmcp.*",   # FastMCP 3.x has stubs but they're incomplete for internals.
+]
 ignore_missing_imports = true

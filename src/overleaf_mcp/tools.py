@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -41,6 +42,17 @@ from .latex import get_section_by_title, parse_sections
 logger = logging.getLogger(__name__)
 
 OVERLEAF_API_URL = "https://www.overleaf.com/docs"
+
+
+def _decode_msg(msg: str | bytes) -> str:
+    """Normalize a GitPython commit message to ``str``.
+
+    GitPython's ``Commit.message`` is typed ``str | bytes`` (it returns
+    whichever encoding the commit object used). Formatting bytes in an
+    f-string produces literal ``b'...'`` text in the response, which is
+    a real bug that slipped through before mypy --strict caught it.
+    """
+    return msg if isinstance(msg, str) else msg.decode("utf-8", errors="replace")
 
 # --- Common parameter annotations (reused across tools) -------------------
 
@@ -378,7 +390,7 @@ async def list_history(
         for c in commits:
             date = c.committed_datetime.strftime("%Y-%m-%d %H:%M")
             lines.append(f"\n{c.hexsha[:8]} | {date} | {c.author.name}")
-            lines.append(f"  {c.message.strip()[:100]}")
+            lines.append(f"  {_decode_msg(c.message).strip()[:100]}")
 
         return ctx.wrap("\n".join(lines))
 
@@ -518,7 +530,7 @@ async def status_summary(
             last_commit = (
                 f"{head.hexsha[:8]} | "
                 f"{head.committed_datetime.strftime('%Y-%m-%d %H:%M')} | "
-                f"{head.author.name} | {head.message.strip()[:80]}"
+                f"{head.author.name} | {_decode_msg(head.message).strip()[:80]}"
             )
         except ValueError:
             last_commit = "(no commits)"
@@ -846,7 +858,10 @@ async def delete_file(
 
 # Name -> implementation. server.py iterates this to register each tool with
 # the MCP framework; tests use execute_tool() to invoke tools by name.
-TOOLS: dict[str, Any] = {
+# Typed as Callable[..., Awaitable[str]] — each tool is an async function
+# returning the response text. Precise signatures vary per tool; FastMCP
+# and the dispatcher shim both accept kwargs so ``...`` is accurate.
+TOOLS: dict[str, Callable[..., Awaitable[str]]] = {
     "create_project": create_project,
     "create_file": create_file,
     "list_projects": list_projects,

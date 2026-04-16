@@ -22,7 +22,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -313,7 +313,7 @@ class ToolContext:
 @asynccontextmanager
 async def acquire_project(
     project: ProjectConfig, *, force_pull: bool = False
-):
+) -> AsyncIterator[ToolContext]:
     """Acquire per-project lock, prepare the repo, yield a ``ToolContext``.
 
     This is the single entry point for every tool branch. It:
