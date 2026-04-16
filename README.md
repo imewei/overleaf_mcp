@@ -71,6 +71,25 @@ source .venv/bin/activate
 uv pip install -e .
 ```
 
+### Install as an MCPB bundle (Claude Desktop)
+
+For a zero-toolchain install — users don't need to `pip install`, just
+drag one file onto Claude Desktop:
+
+```bash
+# From a cloned repo, build the bundle
+./mcpb/build-mcpb.sh
+# → dist/overleaf-mcp-1.1.0.mcpb
+
+# User: drag dist/overleaf-mcp-1.1.0.mcpb onto Claude Desktop
+```
+
+The bundle embeds Python dependencies (`mcp`, `fastmcp`, `gitpython`,
+`pydantic`) but not the Python interpreter itself or `git` — both must
+still be on the user's PATH. See `manifest.json` for the install-time
+config fields (cache dir, Git token, etc.) that Claude Desktop surfaces
+as a native form.
+
 ---
 
 ## Configuration
@@ -274,6 +293,10 @@ Once configured, you can ask the AI assistant:
 | `OVERLEAF_GIT_AUTHOR_EMAIL` | `mcp@overleaf.local` | Git commit author email |
 | `OVERLEAF_PULL_TTL` | `30` | Seconds within which a successful pull is considered fresh enough to skip on subsequent read-only tools. Write tools (`edit_file`, `rewrite_file`, `create_file`, `update_section`, `delete_file`) and `sync_project` always bypass this cache. Set to `0` to pull on every tool call (previous behavior). |
 | `OVERLEAF_GIT_TIMEOUT` | `60` | Hard upper bound (seconds) on any blocking Git operation. Protects against an unresponsive Overleaf endpoint hanging the server. |
+| `OVERLEAF_GIT_URL` | `https://git.overleaf.com` | Base URL for the Overleaf Git endpoint. Override for self-hosted deployments or test fixtures (point at a `file://` bare repo). |
+| `OVERLEAF_SHALLOW_CLONE` | `0` | Set to `1` to use shallow clones (`--depth=N`) for new projects. Dramatically reduces cold-start time and disk usage for multi-GB projects, at the cost of limiting `list_history` to the shallow depth. |
+| `OVERLEAF_SHALLOW_DEPTH` | `1` | Depth for shallow clones. Ignored when `OVERLEAF_SHALLOW_CLONE=0`. |
+| `OVERLEAF_STRUCTURED` | `0` | Set to `1` to append `<mcp-envelope>{"ok":bool,"warnings":[...]}</mcp-envelope>` to every tool response. Useful for agentic clients that want a reliable parse target; off by default so plain-text clients are unaffected. |
 | `GIT_HTTP_LOW_SPEED_LIMIT` | `1000` | Bytes/sec floor — Git aborts if throughput drops below this. |
 | `GIT_HTTP_LOW_SPEED_TIME` | `30` | Seconds that throughput must stay below the limit before aborting. |
 

@@ -1,0 +1,76 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "overleaf-mcp",
+  "version": "1.1.0",
+  "description": "Full-CRUD MCP server for Overleaf LaTeX projects over Git: read/edit/create/delete files, parse LaTeX sections, view diffs and history.",
+  "author": {
+    "name": "Overleaf MCP contributors"
+  },
+  "license": "MIT",
+  "server": {
+    "type": "python",
+    "entry_point": "server/bootstrap.py",
+    "mcp_config": {
+      "command": "python3",
+      "args": [
+        "${__dirname}/server/bootstrap.py"
+      ],
+      "env": {
+        "OVERLEAF_CONFIG_FILE": "${user_config.config_file}",
+        "OVERLEAF_TEMP_DIR": "${user_config.cache_dir}",
+        "OVERLEAF_PROJECT_ID": "${user_config.default_project_id}",
+        "OVERLEAF_GIT_TOKEN": "${user_config.default_git_token}",
+        "OVERLEAF_PULL_TTL": "${user_config.pull_ttl}",
+        "OVERLEAF_GIT_TIMEOUT": "${user_config.git_timeout}"
+      }
+    }
+  },
+  "user_config": {
+    "config_file": {
+      "type": "file",
+      "title": "Config file (overleaf_config.json)",
+      "description": "Path to a JSON file listing multiple Overleaf projects. Leave blank to use single-project mode via the fields below.",
+      "required": false
+    },
+    "cache_dir": {
+      "type": "directory",
+      "title": "Local cache directory",
+      "description": "Directory where project clones are stored. Must be writable.",
+      "default": "${HOME}/.overleaf_mcp/cache",
+      "required": true
+    },
+    "default_project_id": {
+      "type": "string",
+      "title": "Default project ID (single-project mode)",
+      "description": "If you're only using one Overleaf project, paste its ID here. Find it in the project URL: https://www.overleaf.com/project/<PROJECT_ID>",
+      "required": false
+    },
+    "default_git_token": {
+      "type": "string",
+      "title": "Default Git token (single-project mode)",
+      "description": "Overleaf Git integration token (Menu → Git → Generate token). Stored securely in your OS keychain.",
+      "sensitive": true,
+      "required": false
+    },
+    "pull_ttl": {
+      "type": "string",
+      "title": "Pull cache TTL (seconds)",
+      "description": "How long to reuse a cached pull before hitting the network again. Default 30s. Set to 0 to disable (pull every call).",
+      "default": "30",
+      "required": false
+    },
+    "git_timeout": {
+      "type": "string",
+      "title": "Git operation timeout (seconds)",
+      "description": "Hard ceiling on any blocking Git operation. Default 60s.",
+      "default": "60",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": ["darwin", "win32", "linux"]
+  },
+  "keywords": ["overleaf", "latex", "git", "writing", "research"]
+}
