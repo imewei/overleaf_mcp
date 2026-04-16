@@ -292,6 +292,37 @@ def test_get_diff_after_edit(bare_repo):
     assert "+Goodbye." in result
 
 
+def test_get_diff_stat_mode(bare_repo):
+    """stat mode returns compact per-file change counts, no patch body."""
+    run("edit_file", {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."})
+    result = run("get_diff", {"from_ref": "HEAD~1", "to_ref": "HEAD", "mode": "stat"})
+    assert "Diff (stat):" in result
+    assert "main.tex" in result
+    # git --stat output contains a '|' separator between filename and +/- bars
+    assert "|" in result
+    # Critical: the actual patch content must be absent
+    assert "-Hello world." not in result
+    assert "+Goodbye." not in result
+
+
+def test_get_diff_name_only_mode(bare_repo):
+    """name-only mode returns just the list of changed paths."""
+    run("edit_file", {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."})
+    result = run("get_diff", {"from_ref": "HEAD~1", "to_ref": "HEAD", "mode": "name-only"})
+    assert "Changed files:" in result
+    assert "main.tex" in result
+    # No patch content, no stat bars
+    assert "-Hello world." not in result
+    assert "|" not in result.split("Changed files:")[1]  # no stat bars after header
+
+
+def test_get_diff_rejects_unknown_mode(bare_repo):
+    """Unknown mode returns an error, not a git invocation."""
+    result = run("get_diff", {"mode": "patchouli"})
+    assert "unknown diff mode" in result
+    assert "'unified', 'stat', 'name-only'" in result
+
+
 def test_status_summary_detects_main_tex(bare_repo):
     result = run("status_summary", {})
     assert "Test Project" in result

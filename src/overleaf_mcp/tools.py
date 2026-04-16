@@ -90,9 +90,18 @@ async def create_project(
 ) -> str:
     """Create a new Overleaf project from LaTeX content.
 
-    The project will open in Overleaf's web interface. Returns a URL to
-    the new project (user must open it in their browser — Overleaf does
-    not expose a server-to-server project-creation endpoint).
+    Returns an ``overleaf.com/docs?snip_uri=...`` URL that the user opens
+    in their browser to create the project. The human click is by design,
+    not a limitation we can work around.
+
+    Rationale (verified 2026-04-16): Overleaf's only publicly documented
+    "developer API" is this snip_uri form endpoint (see overleaf.com/devs).
+    There is NO documented REST endpoint for server-to-server project
+    creation — git tokens authenticate git transport only, and the
+    available REST surface is limited to operations on already-existing
+    projects. Third-party libraries (pyoverleaf etc.) rely on session
+    cookies or reverse-engineered internal endpoints, which are ToS-risky
+    and fragile. The snip_uri pattern is the supported path.
     """
     if is_zip:
         mime_type = "application/zip"
@@ -388,9 +397,21 @@ async def get_diff(
     paths: Annotated[
         list[str] | None, Field(description="Filter diff to multiple files")
     ] = None,
+    mode: Annotated[
+        str,
+        Field(
+            description=(
+                "Output mode: 'unified' = full patch text (default), "
+                "'stat' = file-level change counts (very compact), "
+                "'name-only' = just the list of changed paths (ultra compact). "
+                "Prefer 'stat' or 'name-only' for large diffs when an agent "
+                "just needs to know WHICH files changed, not the contents."
+            )
+        ),
+    ] = "unified",
     context_lines: Annotated[
         int,
-        Field(description="Number of context lines in unified diff (0-10, default: 3)"),
+        Field(description="Number of context lines in unified diff (0-10, default: 3). Ignored for stat/name-only."),
     ] = 3,
     max_output_chars: Annotated[
         int,
@@ -400,7 +421,19 @@ async def get_diff(
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
 ) -> str:
-    """Get git diff for the project or specific files."""
+    """Get git diff for the project or specific files.
+
+    Supports three output modes:
+    - ``unified`` (default): full unified patch with configurable context.
+    - ``stat``: per-file change counts (``git diff --stat``).
+    - ``name-only``: just the list of changed paths.
+    """
+    if mode not in {"unified", "stat", "name-only"}:
+        return (
+            f"Error: unknown diff mode '{mode}'. "
+            "Valid modes: 'unified', 'stat', 'name-only'."
+        )
+
     project = resolve_project(project_name, git_token, project_id)
     context_lines = max(0, min(10, context_lines))
     max_output_chars = max(2000, min(500000, max_output_chars))
@@ -411,7 +444,15 @@ async def get_diff(
     if paths:
         path_filters.extend(paths)
 
-    diff_args = [f"-U{context_lines}"]
+    # Mode-specific git args. Unified takes -U<n>; stat/name-only replace
+    # the format entirely and ignore context_lines.
+    if mode == "unified":
+        diff_args: list[str] = [f"-U{context_lines}"]
+    elif mode == "stat":
+        diff_args = ["--stat"]
+    else:  # name-only
+        diff_args = ["--name-only"]
+
     if to_ref:
         diff_args.extend([from_ref, to_ref])
     else:
@@ -434,7 +475,15 @@ async def get_diff(
         if truncated:
             diff = diff[:max_output_chars]
 
-        result = f"Diff:\n\n{diff}"
+        # Label the output by mode so callers can tell what they got
+        # without parsing the git output itself.
+        header = {
+            "unified": "Diff:",
+            "stat": "Diff (stat):",
+            "name-only": "Changed files:",
+        }[mode]
+
+        result = f"{header}\n\n{diff}"
         if truncated:
             result += "\n\n[diff truncated]"
         return ctx.wrap(result)

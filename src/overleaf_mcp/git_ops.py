@@ -49,8 +49,14 @@ OVERLEAF_GIT_URL = os.environ.get("OVERLEAF_GIT_URL", "https://git.overleaf.com"
 # OVERLEAF_GIT_TIMEOUT: hard upper bound (seconds) on any blocking Git
 #   operation. Protects the stdio reader from hanging on a network
 #   black-hole.
+# OVERLEAF_SHALLOW_CLONE: when "1", new clones use --depth=N shallow
+#   fetch. Trades history depth for download size — a huge win on
+#   multi-GB projects, breaks deep `list_history` queries. Off by default.
+# OVERLEAF_SHALLOW_DEPTH: depth for shallow clones (default 1). Ignored
+#   when OVERLEAF_SHALLOW_CLONE is off.
 _DEFAULT_PULL_TTL = 30.0
 _DEFAULT_GIT_TIMEOUT = 60.0
+_DEFAULT_SHALLOW_DEPTH = 1
 
 # Subprocess-level backstop for the asyncio timeout ceiling in
 # _run_blocking. If Git can't sustain LIMIT bytes/sec for TIME seconds,
@@ -113,6 +119,25 @@ def _git_timeout() -> float:
         return _DEFAULT_GIT_TIMEOUT
 
 
+def _shallow_clone_kwargs() -> dict[str, Any]:
+    """Return extra kwargs for ``Repo.clone_from`` when shallow mode is on.
+
+    Shallow clones (``--depth=N``) download only the N most recent commits
+    rather than the full history. For multi-GB Overleaf projects this is
+    the difference between a 30-second and a 30-minute cold start, at the
+    cost of breaking ``git log`` beyond the shallow boundary — meaning
+    ``list_history`` caps out at ``OVERLEAF_SHALLOW_DEPTH`` commits and
+    ``get_diff`` against older refs fails. Off by default for correctness.
+    """
+    if os.environ.get("OVERLEAF_SHALLOW_CLONE") != "1":
+        return {}
+    try:
+        depth = max(1, int(os.environ.get("OVERLEAF_SHALLOW_DEPTH", _DEFAULT_SHALLOW_DEPTH)))
+    except ValueError:
+        depth = _DEFAULT_SHALLOW_DEPTH
+    return {"depth": depth}
+
+
 def get_repo_path(project_id: str) -> Path:
     """Get the local repository path for a project."""
     return Path(TEMP_DIR) / project_id
@@ -162,9 +187,16 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
 
     if not repo_path.exists():
         # Cold start — no way to avoid the network. Clone synchronously.
-        logger.info("cloning project %s (cold start)", project.project_id)
+        clone_kwargs = _shallow_clone_kwargs()
+        if clone_kwargs:
+            logger.info(
+                "cloning project %s (cold start, shallow depth=%s)",
+                project.project_id, clone_kwargs["depth"],
+            )
+        else:
+            logger.info("cloning project %s (cold start)", project.project_id)
         repo_path.parent.mkdir(parents=True, exist_ok=True)
-        repo = Repo.clone_from(git_url, repo_path)
+        repo = Repo.clone_from(git_url, repo_path, **clone_kwargs)
         _LAST_PULL[project.project_id] = time.monotonic()
         return repo
 

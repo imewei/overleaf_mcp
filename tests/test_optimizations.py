@@ -188,6 +188,33 @@ def test_ensure_repo_pulls_after_ttl_expiry(
     assert fake_repo.remotes.origin.pull.call_count == 2
 
 
+def test_shallow_clone_kwargs_off_by_default(monkeypatch: pytest.MonkeyPatch):
+    """Without OVERLEAF_SHALLOW_CLONE=1, clone kwargs are empty (full clone)."""
+    monkeypatch.delenv("OVERLEAF_SHALLOW_CLONE", raising=False)
+    assert git_ops._shallow_clone_kwargs() == {}
+
+
+def test_shallow_clone_kwargs_honors_depth(monkeypatch: pytest.MonkeyPatch):
+    """OVERLEAF_SHALLOW_CLONE=1 enables shallow with configurable depth."""
+    monkeypatch.setenv("OVERLEAF_SHALLOW_CLONE", "1")
+    monkeypatch.setenv("OVERLEAF_SHALLOW_DEPTH", "5")
+    assert git_ops._shallow_clone_kwargs() == {"depth": 5}
+
+
+def test_shallow_clone_kwargs_defaults_to_depth_1(monkeypatch: pytest.MonkeyPatch):
+    """Enabled but no depth set — defaults to 1."""
+    monkeypatch.setenv("OVERLEAF_SHALLOW_CLONE", "1")
+    monkeypatch.delenv("OVERLEAF_SHALLOW_DEPTH", raising=False)
+    assert git_ops._shallow_clone_kwargs() == {"depth": 1}
+
+
+def test_shallow_clone_kwargs_clamps_to_minimum_1(monkeypatch: pytest.MonkeyPatch):
+    """Nonsense negative depth is clamped to 1 — `git clone --depth=0` is meaningless."""
+    monkeypatch.setenv("OVERLEAF_SHALLOW_CLONE", "1")
+    monkeypatch.setenv("OVERLEAF_SHALLOW_DEPTH", "-10")
+    assert git_ops._shallow_clone_kwargs() == {"depth": 1}
+
+
 def test_ensure_repo_raises_stale_on_pull_failure(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
