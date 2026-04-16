@@ -52,3 +52,16 @@ def test_list_history_max_limit_200():
     tools = asyncio.get_event_loop().run_until_complete(list_tools())
     history_tool = next(t for t in tools if t.name == "list_history")
     assert "200" in history_tool.inputSchema["properties"]["limit"]["description"]
+
+
+def test_get_diff_schema_has_context_and_truncation():
+    """get_diff tool schema should include context_lines, max_output_chars, paths."""
+    import asyncio
+    from overleaf_mcp.server import list_tools
+
+    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    diff_tool = next(t for t in tools if t.name == "get_diff")
+    props = diff_tool.inputSchema["properties"]
+    assert "context_lines" in props
+    assert "max_output_chars" in props
+    assert "paths" in props

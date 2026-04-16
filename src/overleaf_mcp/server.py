@@ -424,9 +424,30 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Filter diff to a specific file",
                     },
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter diff to multiple files",
+                    },
+                    "context_lines": {
+                        "type": "integer",
+                        "description": "Number of context lines in unified diff (0-10, default: 3)",
+                    },
+                    "max_output_chars": {
+                        "type": "integer",
+                        "description": "Truncate diff output to this many characters (default: 120000)",
+                    },
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
             },
@@ -798,25 +819,51 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     elif name == "get_diff":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
 
         from_ref = arguments.get("from_ref", "HEAD")
         to_ref = arguments.get("to_ref")
-        file_path = arguments.get("file_path")
+        context_lines = max(0, min(10, arguments.get("context_lines", 3)))
+        max_output_chars = max(2000, min(500000, arguments.get("max_output_chars", 120000)))
+
+        # Collect path filters (single file_path or multiple paths)
+        path_filters: list[str] = []
+        if arguments.get("file_path"):
+            path_filters.append(arguments["file_path"])
+        if arguments.get("paths"):
+            path_filters.extend(arguments["paths"])
 
         try:
+            diff_args = [f"-U{context_lines}"]
             if to_ref:
-                diff = repo.git.diff(from_ref, to_ref, file_path) if file_path else repo.git.diff(from_ref, to_ref)
+                diff_args.extend([from_ref, to_ref])
             else:
-                diff = repo.git.diff(from_ref, "--", file_path) if file_path else repo.git.diff(from_ref)
+                diff_args.append(from_ref)
+
+            if path_filters:
+                diff_args.append("--")
+                diff_args.extend(path_filters)
+
+            diff = repo.git.diff(*diff_args)
         except GitCommandError as e:
             return f"Error getting diff: {e}"
 
         if not diff:
             return "No differences found"
 
-        return f"Diff:\n\n{diff}"
+        truncated = len(diff) > max_output_chars
+        if truncated:
+            diff = diff[:max_output_chars]
+
+        result = f"Diff:\n\n{diff}"
+        if truncated:
+            result += "\n\n[diff truncated]"
+        return result
 
     # === UPDATE OPERATIONS ===
 
