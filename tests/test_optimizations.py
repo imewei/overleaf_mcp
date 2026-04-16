@@ -282,6 +282,50 @@ def test_acquire_project_falls_back_on_stale(
     asyncio.run(_run())
 
 
+def test_acquire_project_falls_back_on_auth_failure(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Bad-token auth failure MUST serve the cached snapshot with a
+    user-actionable warning — never silent failure, never an exception
+    bubbled past the tool.
+
+    This is the v1 test gap: the generic stale fallback was covered, but
+    the specific auth-failure path Overleaf returns on a revoked or
+    rotated token was not. A future regression that re-raises auth errors
+    instead of degrading would silently break every read tool against
+    expired credentials. This test pins the behavior down.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    # Bypass the retry-jitter sleep — this test isn't about retry timing
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.0, 0.0))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    # The exact stderr text Overleaf returns on a bad token (also covered
+    # by test_pull_does_not_retry_on_permanent_failure for the no-retry
+    # invariant; this test covers the user-facing behavior end-to-end).
+    fake_repo.remotes.origin.pull.side_effect = GitCommandError(
+        "pull", 128, b"",
+        b"fatal: Authentication failed for 'https://git.overleaf.com/abc123/'",
+    )
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
+            async with acquire_project(fake_project, mode="read") as ctx:
+                # Body still runs — agent gets working tree access
+                assert ctx.repo is fake_repo
+                assert len(ctx.warnings) == 1
+                # Warning is human-readable and mentions the actual cause
+                w = ctx.warnings[0]
+                assert "could not refresh" in w
+                assert "Authentication failed" in w, (
+                    f"Auth-failure warning lost the underlying message: {w!r}"
+                )
+
+    asyncio.run(_run())
+
+
 def test_acquire_project_releases_lock_on_exception(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
