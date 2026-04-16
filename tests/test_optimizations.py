@@ -182,7 +182,7 @@ def test_ensure_repo_pulls_after_ttl_expiry(
     fake_repo = _make_fake_repo()
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
         ensure_repo(fake_project)
-        git_ops._LAST_PULL[fake_project.project_id] -= 10.0
+        git_ops._LAST_PULL[git_ops._pull_cache_key(fake_project)] -= 10.0
         ensure_repo(fake_project)
 
     assert fake_repo.remotes.origin.pull.call_count == 2
@@ -594,6 +594,60 @@ def test_acquire_project_writers_still_serialize(
         )
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# _LAST_PULL key precision (project_id, token_hash) — HTTP-transport future-proof
+# ---------------------------------------------------------------------------
+
+
+def test_pull_cache_separates_clients_with_different_tokens(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Same project_id, different tokens → separate freshness entries.
+
+    Today this is benign because stdio MCP serves one client per process.
+    But if/when HTTP transport multiplexes clients, client A's recent pull
+    must NOT suppress client B's needed pull — they have different
+    auth contexts and may legitimately see different repository state.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "60")  # large window
+    (tmp_path / "shared-id").mkdir()
+
+    # Two clients see the same project_id but hold different tokens.
+    proj_a = ProjectConfig(name="a", project_id="shared-id", git_token="tok_A")
+    proj_b = ProjectConfig(name="b", project_id="shared-id", git_token="tok_B")
+
+    fake_repo = _make_fake_repo()
+    with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
+        ensure_repo(proj_a)  # client A pulls — entry stored
+        ensure_repo(proj_b)  # client B should ALSO pull — different token
+
+    # Critical invariant: B is not piggybacking on A's freshness flag.
+    assert fake_repo.remotes.origin.pull.call_count == 2, (
+        "Client B's pull was suppressed by client A's TTL entry — "
+        "_LAST_PULL key is too coarse"
+    )
+
+
+def test_pull_cache_same_token_still_dedupes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Same project + same token → second call hits cache (v1 invariant)."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "60")
+    (tmp_path / "p1").mkdir()
+
+    proj = ProjectConfig(name="x", project_id="p1", git_token="same_tok")
+
+    fake_repo = _make_fake_repo()
+    with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
+        ensure_repo(proj)
+        ensure_repo(proj)
+
+    # v1 behavior preserved: identical (project_id, token) hits the cache
+    assert fake_repo.remotes.origin.pull.call_count == 1
 
 
 # ---------------------------------------------------------------------------

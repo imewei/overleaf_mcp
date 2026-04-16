@@ -18,6 +18,7 @@ No MCP protocol knowledge lives here — that stays in ``tools.py`` and
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -113,13 +114,15 @@ class StaleRepoWarning(Exception):
 
 # Module-level state. Process-local, no cross-invocation persistence.
 #
-# _LAST_PULL:        project_id -> monotonic timestamp of last successful pull.
-#                    NOTE: keyed by project_id alone. This assumes a single
-#                    client (the stdio MCP model). If a future HTTP transport
-#                    multiplexes clients with potentially different tokens for
-#                    the same project_id, the key must extend to
-#                    (project_id, token_hash) to prevent client A's freshness
-#                    flag from suppressing a necessary pull for client B.
+# _LAST_PULL:        (project_id, token_hash) -> monotonic timestamp of last
+#                    successful pull. v2 widened the key from project_id alone
+#                    to also incorporate a 16-hex-char prefix of the token's
+#                    SHA-256 hash. Today (single-client stdio) this changes
+#                    nothing. Tomorrow (HTTP transport multiplexing clients),
+#                    it ensures client A's freshness flag can't suppress a
+#                    needed pull for client B holding a different token —
+#                    they may legitimately see different repository state
+#                    (e.g. one revoked/rotated, one not).
 #
 # _PROJECT_RWLOCKS:  project_id -> _RWLock. Serializes concurrent tool calls
 #                    against the same local clone with reader-writer semantics:
@@ -131,8 +134,22 @@ class StaleRepoWarning(Exception):
 #                    the v1 design that v2 is loosening here. Lazily
 #                    initialized in _rwlock_for(); never cleared — lock
 #                    objects are cheap and projects don't churn in practice.
-_LAST_PULL: dict[str, float] = {}
+#                    NOTE: keyed by project_id alone, not (project_id, token).
+#                    The lock protects the on-disk clone, which is shared by
+#                    every client of that project regardless of auth.
+_LAST_PULL: dict[tuple[str, str], float] = {}
 _PROJECT_RWLOCKS: dict[str, _RWLock] = {}
+
+
+def _pull_cache_key(project: ProjectConfig) -> tuple[str, str]:
+    """Return the (project_id, token_hash) key used by _LAST_PULL.
+
+    Token hash is the first 16 hex chars of SHA-256(token) — collision
+    space of 2^64 is more than enough for the realistic project-count
+    scale, and we never store the raw token for cache purposes.
+    """
+    token_hash = hashlib.sha256(project.git_token.encode()).hexdigest()[:16]
+    return (project.project_id, token_hash)
 
 
 class _RWLock:
@@ -296,6 +313,7 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
     """
     repo_path = get_repo_path(project.project_id)
     git_url = _build_git_url(project)
+    cache_key = _pull_cache_key(project)
 
     if not repo_path.exists():
         # Cold start — no way to avoid the network. Clone synchronously.
@@ -313,7 +331,7 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
         # don't pay a redundant config-writer fsync on every commit. The
         # function is idempotent — see config_git_user docstring.
         config_git_user(repo)
-        _LAST_PULL[project.project_id] = time.monotonic()
+        _LAST_PULL[cache_key] = time.monotonic()
         return repo
 
     repo = Repo(repo_path)
@@ -325,7 +343,7 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
         origin.set_url(git_url)
 
     now = time.monotonic()
-    last = _LAST_PULL.get(project.project_id, 0.0)
+    last = _LAST_PULL.get(cache_key, 0.0)
     if not force_pull and (now - last) < _pull_ttl():
         # Within TTL window — skip the network entirely.
         logger.debug(
@@ -340,7 +358,7 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
     )
     try:
         origin.pull()
-        _LAST_PULL[project.project_id] = now
+        _LAST_PULL[cache_key] = now
     except GitCommandError as e:
         msg = str(e).strip()
         # One transparent retry for transient failures only (network blip,
@@ -355,7 +373,7 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
             time.sleep(delay)
             try:
                 origin.pull()
-                _LAST_PULL[project.project_id] = time.monotonic()
+                _LAST_PULL[cache_key] = time.monotonic()
                 return repo
             except GitCommandError as retry_e:
                 msg = str(retry_e).strip()
