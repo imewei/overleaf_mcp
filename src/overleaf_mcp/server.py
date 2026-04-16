@@ -321,6 +321,14 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
                     },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
+                    },
                 },
             },
         ),
@@ -337,6 +345,14 @@ async def list_tools() -> list[Tool]:
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
                 "required": ["file_path"],
@@ -359,6 +375,14 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
                     },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
+                    },
                 },
                 "required": ["file_path"],
             },
@@ -380,6 +404,14 @@ async def list_tools() -> list[Tool]:
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
                 "required": ["file_path", "section_title"],
@@ -646,6 +678,14 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
                     },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
+                    },
                 },
             },
         ),
@@ -813,7 +853,11 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     elif name == "list_files":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
@@ -834,7 +878,11 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return f"Files in project '{project.name}':\n" + "\n".join(f"  - {f}" for f in files)
 
     elif name == "read_file":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
@@ -848,7 +896,11 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return f"Content of '{file_path}':\n\n{content}"
 
     elif name == "get_sections":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
@@ -872,7 +924,11 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return "\n".join(lines)
 
     elif name == "get_section_content":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
@@ -1199,7 +1255,11 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return f"Updated section '{section_title}'{' and pushed' if push else ''}"
 
     elif name == "sync_project":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo_path = get_repo_path(project.project_id)
 
         if not repo_path.exists():

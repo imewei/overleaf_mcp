@@ -89,3 +89,21 @@ def test_write_tools_have_dry_run_and_push():
         props = tool.inputSchema["properties"]
         assert "dry_run" in props, f"{tool_name} missing dry_run"
         assert "push" in props, f"{tool_name} missing push"
+
+
+def test_all_project_tools_have_inline_credentials():
+    """All tools that accept project_name as a config key should also accept git_token and project_id."""
+    import asyncio
+    from overleaf_mcp.server import list_tools
+
+    # create_project uses project_name as a display label, not a config lookup key
+    skip_tools = {"create_project"}
+
+    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    for tool in tools:
+        if tool.name in skip_tools:
+            continue
+        props = tool.inputSchema.get("properties", {})
+        if "project_name" in props:
+            assert "git_token" in props, f"{tool.name} missing git_token"
+            assert "project_id" in props, f"{tool.name} missing project_id"
