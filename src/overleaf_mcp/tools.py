@@ -221,8 +221,9 @@ async def list_files(
         str,
         Field(
             description=(
-                "Filter by file extension (e.g., '.tex', '.bib'). "
-                "Leave empty for all files."
+                "Exact extension match including the leading dot, "
+                "case-sensitive (e.g., '.tex', '.bib', '.cls'). "
+                "Empty = all files."
             )
         ),
     ] = "",
@@ -230,7 +231,11 @@ async def list_files(
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
 ) -> str:
-    """List files in an Overleaf project."""
+    """List files in an Overleaf project (paths only, sorted).
+
+    For project orientation including commit and section structure,
+    prefer status_summary.
+    """
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
 
@@ -256,15 +261,23 @@ async def list_files(
 
 
 async def read_file(
-    file_path: Annotated[str, Field(description="Path to the file within the project")],
+    file_path: Annotated[
+        str,
+        Field(
+            description=(
+                "Path to a text file within the project, e.g. 'main.tex', "
+                "'chapters/intro.tex', 'refs.bib'. Binary files return "
+                "garbled output — use list_files first if unsure."
+            )
+        ),
+    ],
     max_bytes: Annotated[
         int,
         Field(
             description=(
-                "Truncate file output to this many bytes (default: 200000, "
-                "ceiling: 2000000). Mirrors get_diff's max_output_chars: "
-                "guards against multi-MB .tex/.bib files flooding the "
-                "agent context window. Truncation is marked with "
+                "Truncate output to this many bytes (default: 200000, "
+                "ceiling: 2000000). Guards against multi-MB files flooding "
+                "the context window. Truncation is marked with "
                 "[file truncated at N bytes]."
             )
         ),
@@ -273,7 +286,11 @@ async def read_file(
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
 ) -> str:
-    """Read the content of a file from an Overleaf project."""
+    """Read the full text content of a file from an Overleaf project.
+
+    For LaTeX section-level access prefer get_section_content (lighter
+    response, no risk of hitting max_bytes on a long document).
+    """
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
     # Clamp to a sane band — same defensive pattern as get_diff.
@@ -525,9 +542,10 @@ async def status_summary(
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
 ) -> str:
-    """Get a comprehensive project status summary.
+    """Project overview: file inventory, latest commit, main-document section tree.
 
-    Includes file counts, last commit, and main-document section structure.
+    Use this for first-look orientation on an unfamiliar project — one
+    call replaces list_files + list_history + get_sections.
     """
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
@@ -667,7 +685,11 @@ async def rewrite_file(
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
 ) -> str:
-    """Replace entire file contents. Commits and pushes immediately."""
+    """Replace entire file contents. Commits and pushes immediately.
+
+    For surgical changes prefer edit_file (smaller diffs, easier review,
+    safer when the file has uncommitted divergent edits upstream).
+    """
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
     msg = commit_message or f"Rewrite {file_path}"

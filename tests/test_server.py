@@ -91,6 +91,29 @@ def test_write_tools_have_dry_run_and_push():
         assert "push" in props, f"{tool_name} missing push"
 
 
+def test_tools_list_byte_budget():
+    """The full tools/list JSON must stay under a generous size budget.
+
+    This payload rides in the agent's context window for the entire
+    session. The cap (16384 bytes — 7 % growth headroom over the v2
+    measurement of 14 387) is large enough not to fight description
+    improvements but tight enough to catch accidental schema bloat.
+    """
+    import asyncio
+    import json
+    from overleaf_mcp.tools import list_tools
+
+    tools = asyncio.run(list_tools())
+    payload = json.dumps([
+        {"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
+        for t in tools
+    ])
+    assert len(payload) <= 16384, (
+        f"tools/list JSON has grown to {len(payload)} bytes — over the "
+        f"16384-byte budget. Tighten descriptions or split the tool surface."
+    )
+
+
 def test_all_project_tools_have_inline_credentials():
     """All tools that accept project_name as a config key should also accept git_token and project_id."""
     import asyncio
