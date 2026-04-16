@@ -159,7 +159,7 @@ async def create_file(
     repo_path = get_repo_path(project.project_id)
     msg = commit_message or f"Add {file_path}"
 
-    async with acquire_project(project, force_pull=True) as ctx:
+    async with acquire_project(project, force_pull=True, mode="write") as ctx:
         target_path = validate_path(repo_path, file_path)
 
         if target_path.exists():
@@ -598,7 +598,7 @@ async def edit_file(
     repo_path = get_repo_path(project.project_id)
     msg = commit_message or f"Edit {file_path}"
 
-    async with acquire_project(project, force_pull=True) as ctx:
+    async with acquire_project(project, force_pull=True, mode="write") as ctx:
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():
@@ -654,7 +654,7 @@ async def rewrite_file(
     repo_path = get_repo_path(project.project_id)
     msg = commit_message or f"Rewrite {file_path}"
 
-    async with acquire_project(project, force_pull=True) as ctx:
+    async with acquire_project(project, force_pull=True, mode="write") as ctx:
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():
@@ -707,7 +707,7 @@ async def update_section(
     repo_path = get_repo_path(project.project_id)
     msg = commit_message or f"Update section '{section_title}'"
 
-    async with acquire_project(project, force_pull=True) as ctx:
+    async with acquire_project(project, force_pull=True, mode="write") as ctx:
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():
@@ -789,7 +789,7 @@ async def sync_project(
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
 
-    async with _lock_for(project.project_id):
+    async with _lock_for(project.project_id).exclusive():
         if not repo_path.exists():
             await _run_blocking(ensure_repo, project, force_pull=True)
             return f"Cloned project '{project.name}'"
@@ -829,7 +829,7 @@ async def delete_file(
     repo_path = get_repo_path(project.project_id)
     msg = commit_message or f"Delete {file_path}"
 
-    async with acquire_project(project, force_pull=True) as ctx:
+    async with acquire_project(project, force_pull=True, mode="write") as ctx:
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():

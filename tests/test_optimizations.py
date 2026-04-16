@@ -49,11 +49,11 @@ def _reset_module_caches():
     """Clear module-level state before every test (test isolation)."""
     config_mod._CONFIG_CACHE = None
     git_ops._LAST_PULL.clear()
-    git_ops._PROJECT_LOCKS.clear()
+    git_ops._PROJECT_RWLOCKS.clear()
     yield
     config_mod._CONFIG_CACHE = None
     git_ops._LAST_PULL.clear()
-    git_ops._PROJECT_LOCKS.clear()
+    git_ops._PROJECT_RWLOCKS.clear()
 
 
 @pytest.fixture
@@ -292,15 +292,21 @@ def test_acquire_project_releases_lock_on_exception(
     fake_repo = _make_fake_repo()
 
     async def _run():
-        lock = _lock_for(fake_project.project_id)
+        rwlock = _lock_for(fake_project.project_id)
         with (
             patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo),
             pytest.raises(RuntimeError, match="boom"),
         ):
             async with acquire_project(fake_project):
                 raise RuntimeError("boom")
-        # Lock must be releasable (re-acquirable) after the failed block.
-        assert not lock.locked()
+        # The proof of "lock released" is that we can re-acquire exclusive
+        # without blocking. If the writer/reader counters leaked, this would
+        # deadlock and pytest would time out.
+        async with rwlock.exclusive():
+            pass
+        # Direct invariant assertions on the released state.
+        assert rwlock._readers == 0
+        assert rwlock._writer is False
 
     asyncio.run(_run())
 
@@ -379,12 +385,14 @@ def test_toolcontext_wrap_envelope_ok_false_on_error_prefix(monkeypatch: pytest.
 def test_acquire_project_serializes_same_project(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
-    """Two concurrent acquire_project() calls on the same project must not
+    """Two concurrent write-mode acquisitions on the same project must not
     execute the critical section concurrently.
 
     This is the regression test for the race identified in code review:
     without the per-project lock, two parallel writers could both pass the
-    TTL check and race on GitPython's index.
+    TTL check and race on GitPython's index. v2 still serializes writers;
+    only readers (mode="read") run concurrently — see the dedicated
+    reader-concurrency tests at the bottom of this file.
     """
     monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / fake_project.project_id).mkdir()
@@ -395,7 +403,7 @@ def test_acquire_project_serializes_same_project(
 
     async def body(tag: str):
         nonlocal max_concurrent, current
-        async with acquire_project(fake_project, force_pull=True):
+        async with acquire_project(fake_project, force_pull=True, mode="write"):
             current += 1
             max_concurrent = max(max_concurrent, current)
             # Hold the critical section long enough that a racing caller
@@ -477,3 +485,146 @@ def test_run_blocking_returns_value_under_timeout(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("OVERLEAF_GIT_TIMEOUT", "5")
     result = asyncio.run(_run_blocking(lambda: 42))
     assert result == 42
+
+
+# ---------------------------------------------------------------------------
+# Reader-writer lock — concurrent readers + writer-priority exclusion
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_project_allows_concurrent_readers(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Two read-mode acquisitions on the same project MUST run concurrently.
+
+    This is the v2 perf optimization — read-only tools should no longer
+    queue behind each other on the same project's lock. If max_concurrent
+    is still 1, the RW split has not actually loosened read concurrency.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    max_concurrent = 0
+    current = 0
+
+    async def reader(tag: str):
+        nonlocal max_concurrent, current
+        async with acquire_project(fake_project, mode="read"):
+            current += 1
+            max_concurrent = max(max_concurrent, current)
+            await asyncio.sleep(0.02)
+            current -= 1
+            return tag
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            await asyncio.gather(reader("a"), reader("b"), reader("c"))
+        assert max_concurrent >= 2, (
+            f"Readers serialized (max={max_concurrent}); RW lock did not "
+            "loosen the read path"
+        )
+
+    asyncio.run(_run())
+
+
+def test_acquire_project_writer_excludes_readers(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A write acquisition MUST exclude all readers for its duration."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    in_writer = False
+    overlap_with_writer = False
+
+    async def writer():
+        nonlocal in_writer
+        async with acquire_project(fake_project, mode="write", force_pull=True):
+            in_writer = True
+            await asyncio.sleep(0.05)
+            in_writer = False
+
+    async def reader():
+        nonlocal overlap_with_writer
+        async with acquire_project(fake_project, mode="read"):
+            if in_writer:
+                overlap_with_writer = True
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            # Start writer first, then a few readers that would overlap
+            # if exclusion is not honored.
+            w = asyncio.create_task(writer())
+            await asyncio.sleep(0.005)  # let writer enter
+            await asyncio.gather(reader(), reader(), reader(), w)
+        assert not overlap_with_writer, (
+            "Reader entered while writer held the lock — write exclusion broken"
+        )
+
+    asyncio.run(_run())
+
+
+def test_acquire_project_writers_still_serialize(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Two writers on the same project MUST still serialize (v1 invariant)."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    max_concurrent = 0
+    current = 0
+
+    async def writer(tag: str):
+        nonlocal max_concurrent, current
+        async with acquire_project(fake_project, mode="write", force_pull=True):
+            current += 1
+            max_concurrent = max(max_concurrent, current)
+            await asyncio.sleep(0.02)
+            current -= 1
+            return tag
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            await asyncio.gather(writer("a"), writer("b"), writer("c"))
+        assert max_concurrent == 1, (
+            f"Writers ran concurrently (max={max_concurrent}); v1 race fix lost"
+        )
+
+    asyncio.run(_run())
+
+
+def test_acquire_project_default_mode_is_read(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Default mode (no kwarg) MUST behave as read — back-compat for any
+    caller that hasn't been updated to pass mode= explicitly.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    max_concurrent = 0
+    current = 0
+
+    async def caller(tag: str):
+        nonlocal max_concurrent, current
+        # No mode= kwarg — must default to read
+        async with acquire_project(fake_project):
+            current += 1
+            max_concurrent = max(max_concurrent, current)
+            await asyncio.sleep(0.02)
+            current -= 1
+            return tag
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            await asyncio.gather(caller("a"), caller("b"))
+        assert max_concurrent == 2, (
+            "Default mode is not read — callers without explicit mode= "
+            "are still being serialized"
+        )
+
+    asyncio.run(_run())

@@ -42,11 +42,11 @@ def _reset_module_state():
     """Prevent cache/lock leakage between tests."""
     config_mod._CONFIG_CACHE = None
     git_ops._LAST_PULL.clear()
-    git_ops._PROJECT_LOCKS.clear()
+    git_ops._PROJECT_RWLOCKS.clear()
     yield
     config_mod._CONFIG_CACHE = None
     git_ops._LAST_PULL.clear()
-    git_ops._PROJECT_LOCKS.clear()
+    git_ops._PROJECT_RWLOCKS.clear()
 
 
 PROJECT_ID = "test-project"

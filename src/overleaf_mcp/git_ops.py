@@ -26,7 +26,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from git import GitCommandError, Repo
 
@@ -76,31 +76,106 @@ class StaleRepoWarning(Exception):
 
 # Module-level state. Process-local, no cross-invocation persistence.
 #
-# _LAST_PULL:    project_id -> monotonic timestamp of last successful pull.
-#                NOTE: keyed by project_id alone. This assumes a single
-#                client (the stdio MCP model). If a future HTTP transport
-#                multiplexes clients with potentially different tokens for
-#                the same project_id, the key must extend to
-#                (project_id, token_hash) to prevent client A's freshness
-#                flag from suppressing a necessary pull for client B.
+# _LAST_PULL:        project_id -> monotonic timestamp of last successful pull.
+#                    NOTE: keyed by project_id alone. This assumes a single
+#                    client (the stdio MCP model). If a future HTTP transport
+#                    multiplexes clients with potentially different tokens for
+#                    the same project_id, the key must extend to
+#                    (project_id, token_hash) to prevent client A's freshness
+#                    flag from suppressing a necessary pull for client B.
 #
-# _PROJECT_LOCKS: project_id -> asyncio.Lock. Serializes concurrent tool
-#                calls against the same local clone. Without this, two
-#                parallel writers can both pass the TTL check and race on
-#                GitPython's non-thread-safe index. Lazily initialized in
-#                _lock_for(); never cleared — lock objects are cheap and
-#                projects don't churn in practice.
+# _PROJECT_RWLOCKS:  project_id -> _RWLock. Serializes concurrent tool calls
+#                    against the same local clone with reader-writer semantics:
+#                    readers (read tools) run concurrently; writers (write
+#                    tools + the refresh phase) get exclusive access. Without
+#                    the writer side, parallel writers would race on
+#                    GitPython's non-thread-safe index. Without the reader
+#                    side, every read tool would queue behind every other —
+#                    the v1 design that v2 is loosening here. Lazily
+#                    initialized in _rwlock_for(); never cleared — lock
+#                    objects are cheap and projects don't churn in practice.
 _LAST_PULL: dict[str, float] = {}
-_PROJECT_LOCKS: dict[str, asyncio.Lock] = {}
+_PROJECT_RWLOCKS: dict[str, _RWLock] = {}
 
 
-def _lock_for(project_id: str) -> asyncio.Lock:
-    """Return the per-project lock, creating it on first access."""
-    lock = _PROJECT_LOCKS.get(project_id)
+class _RWLock:
+    """Async reader-writer lock with writer priority.
+
+    Readers acquire shared access via :meth:`shared`; writers acquire
+    exclusive access via :meth:`exclusive`. Writer priority means a pending
+    writer blocks new readers, which prevents reader starvation under
+    sustained read load.
+
+    Why not ``asyncio.Lock``? A plain Lock serializes everything. For
+    overleaf_mcp's read-heavy agent workload, that's wasteful — concurrent
+    ``read_file`` / ``list_files`` / ``get_sections`` tools touch only the
+    working tree, never mutate ``.git``, and can safely run in parallel.
+    The writer side preserves the v1 invariant that pulls/commits/pushes
+    serialize against everything else (GitPython is not thread-safe).
+    """
+
+    def __init__(self) -> None:
+        self._cond = asyncio.Condition()
+        self._readers = 0
+        self._writer = False
+        self._writers_pending = 0
+
+    @asynccontextmanager
+    async def shared(self) -> AsyncIterator[None]:
+        """Acquire shared (reader) access. Multiple holders allowed."""
+        async with self._cond:
+            # Writer-priority: a pending writer blocks new readers.
+            while self._writer or self._writers_pending > 0:
+                await self._cond.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    # Wake any pending writer (or other waiters).
+                    self._cond.notify_all()
+
+    @asynccontextmanager
+    async def exclusive(self) -> AsyncIterator[None]:
+        """Acquire exclusive (writer) access. Excludes all other holders."""
+        async with self._cond:
+            self._writers_pending += 1
+            try:
+                while self._readers > 0 or self._writer:
+                    await self._cond.wait()
+                self._writer = True
+            finally:
+                self._writers_pending -= 1
+        try:
+            yield
+        finally:
+            async with self._cond:
+                self._writer = False
+                self._cond.notify_all()
+
+
+def _rwlock_for(project_id: str) -> _RWLock:
+    """Return the per-project RW lock, creating it on first access."""
+    lock = _PROJECT_RWLOCKS.get(project_id)
     if lock is None:
-        lock = asyncio.Lock()
-        _PROJECT_LOCKS[project_id] = lock
+        lock = _RWLock()
+        _PROJECT_RWLOCKS[project_id] = lock
     return lock
+
+
+def _lock_for(project_id: str) -> _RWLock:
+    """Back-compat alias for ``_rwlock_for`` — returns the RW lock object.
+
+    Kept so external callers (notably ``sync_project`` in tools.py) that
+    previously did ``async with _lock_for(...):`` can migrate by switching
+    to ``async with _lock_for(...).exclusive():`` without changing the
+    import. The single entry point for tool branches is ``acquire_project``;
+    this helper is the escape hatch for the small number of call sites
+    that need lower-level control.
+    """
+    return _rwlock_for(project_id)
 
 
 def _pull_ttl() -> float:
@@ -312,34 +387,49 @@ class ToolContext:
 
 @asynccontextmanager
 async def acquire_project(
-    project: ProjectConfig, *, force_pull: bool = False
+    project: ProjectConfig,
+    *,
+    force_pull: bool = False,
+    mode: Literal["read", "write"] = "read",
 ) -> AsyncIterator[ToolContext]:
-    """Acquire per-project lock, prepare the repo, yield a ``ToolContext``.
+    """Acquire per-project RW lock, prepare the repo, yield a ``ToolContext``.
 
-    This is the single entry point for every tool branch. It:
-      1. Acquires the per-project :class:`asyncio.Lock` (creating it on
-         first use). The lock is held for the entire ``async with`` body,
-         which serializes concurrent tool calls against the same project's
-         local clone — necessary because GitPython is not thread-safe.
-      2. Runs :func:`ensure_repo` off the event loop via
-         :func:`_run_blocking`, honoring the TTL cache and force_pull flag.
-      3. On :class:`StaleRepoWarning`, falls back to opening the local
-         clone and attaches a user-visible warning.
-      4. Yields a :class:`ToolContext` for the body to consume.
-      5. Releases the lock automatically on exit (including on exception).
+    This is the single entry point for every tool branch. Two-phase design:
+
+      Phase 1 (refresh, always exclusive): runs :func:`ensure_repo` under the
+      writer lock. Holding exclusive here serializes concurrent pulls against
+      the same project — necessary because two parallel pulls race on
+      ``.git/HEAD`` and ``.git/index``. For TTL-cache-fresh calls the writer
+      lock is held for ~µs (no I/O happens). On :class:`StaleRepoWarning`,
+      falls back to the local snapshot with a visible warning attached.
+
+      Phase 2 (tool body): re-acquires the lock per ``mode`` —
+      ``mode="read"`` takes shared (multiple readers run concurrently);
+      ``mode="write"`` takes exclusive (full v1 serialization preserved).
+
+    Mode defaults to ``read`` so any caller that omits the kwarg gets the
+    safe-and-fast read path. Write tools must pass ``mode="write"``
+    explicitly. Mixing ``force_pull=False`` with ``mode="write"`` is
+    permitted but unusual — write tools normally pair both flags.
     """
-    async with _lock_for(project.project_id):
+    rwlock = _rwlock_for(project.project_id)
+
+    # Phase 1: refresh under exclusive (writer) lock.
+    warnings: list[str] = []
+    repo: Repo
+    async with rwlock.exclusive():
         try:
             repo = await _run_blocking(ensure_repo, project, force_pull=force_pull)
-            yield ToolContext(repo=repo)
         except StaleRepoWarning as w:
             logger.info("serving stale snapshot for %s: %s", project.project_id, w)
             repo_path = get_repo_path(project.project_id)
             repo = Repo(repo_path)
-            yield ToolContext(
-                repo=repo,
-                warnings=[f"⚠ could not refresh from Overleaf: {w}"],
-            )
+            warnings = [f"⚠ could not refresh from Overleaf: {w}"]
+
+    # Phase 2: tool body — shared for read, exclusive for write.
+    body_lock = rwlock.shared() if mode == "read" else rwlock.exclusive()
+    async with body_lock:
+        yield ToolContext(repo=repo, warnings=warnings)
 
 
 def config_git_user(repo: Repo) -> None:
