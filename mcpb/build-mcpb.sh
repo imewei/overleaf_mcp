@@ -41,18 +41,34 @@ cp "$REPO_ROOT/mcpb/bootstrap.py" "$STAGE/server/bootstrap.py"
 cp -r "$REPO_ROOT/src/overleaf_mcp" "$STAGE/server/overleaf_mcp"
 
 # 4) Vendored dependencies. Runtime deps only — dev extras are excluded.
+#
+# Prefer `uv pip install --target` (works even when pip isn't in the venv,
+# common for uv-managed environments). Fall back to `python -m pip` for
+# systems without uv.
 echo ">> Vendoring runtime deps into server/vendor/"
-python3 -m pip install \
-    --target "$STAGE/server/vendor" \
-    --no-compile \
+VENDOR_DEPS=(
     "mcp>=1.0.0" "fastmcp>=3.0.0" "gitpython>=3.1.40" "pydantic>=2.0.0"
+)
+if command -v uv >/dev/null 2>&1; then
+    uv pip install --target "$STAGE/server/vendor" --no-compile "${VENDOR_DEPS[@]}"
+else
+    python3 -m pip install --target "$STAGE/server/vendor" --no-compile "${VENDOR_DEPS[@]}"
+fi
 
-# Strip bytecode to shrink the archive. We intentionally DO NOT strip
-# *.dist-info — pydantic, fastmcp, and the mcp SDK all call
-# importlib.metadata.version(pkg) at runtime, and that API reads from
-# dist-info metadata. Removing it produces PackageNotFoundError at
-# bundle-load time. Verified 2026-04-16.
+# Strip items that are safe to remove — never imported at runtime.
+#
+# KEEP *.dist-info: pydantic, fastmcp, and the mcp SDK all call
+#     importlib.metadata.version(pkg) at runtime. Removing dist-info
+#     produces PackageNotFoundError at bundle-load time. Verified 2026-04-16.
+# REMOVE __pycache__: regenerated on first import, never needed shipped.
+# REMOVE tests/: packages sometimes ship their own test suites; never
+#     invoked by our code and sometimes include multi-MB fixture data.
+# REMOVE docs/ examples/ locale/: documentation sources, never imported.
+# REMOVE *.pyi: type stubs only used by static analyzers, not runtime.
+echo ">> Stripping safe-to-remove files from vendor/"
 find "$STAGE/server/vendor" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+find "$STAGE/server/vendor" -type d \( -name tests -o -name testing -o -name docs -o -name examples -o -name locale \) -exec rm -rf {} + 2>/dev/null || true
+find "$STAGE/server/vendor" -name '*.pyi' -delete 2>/dev/null || true
 
 # 5) Validate + pack
 mkdir -p "$DIST"
