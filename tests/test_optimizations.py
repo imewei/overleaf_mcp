@@ -1062,3 +1062,86 @@ def test_acquire_project_default_mode_is_read(
         )
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Item 6 (OPTIMIZATION_PLAN_V2): tools/list schema byte budget
+# ---------------------------------------------------------------------------
+#
+# The 15-tool catalogue ships in every tools/list response and lives in the
+# client's context for the entire session. The plan's T7.5 argued that each
+# byte is a tradeoff (better selection vs. token cost per turn); commit
+# b3a4390 did the one-shot audit and tightened several Field descriptions.
+#
+# This test is the regression gate: it pins the post-audit size at a known
+# ceiling so silent drift can't creep back in. When it fails, the author is
+# forced to decide between (a) trimming their description or (b) raising the
+# ceiling — both explicit actions that leave a paper trail in git blame.
+
+
+def test_tools_list_schema_stays_under_byte_budget():
+    """Cap the total bytes of the tools/list payload to prevent description
+    bloat from silently expanding the per-turn context cost.
+
+    The ceiling matches the plan's explicit ≤5 % growth target over the
+    post-audit baseline (14 382 bytes at commit b3a4390 → 14 500 here,
+    a small amount of breathing room for minor wording nudges).
+
+    When this test fails:
+    * Did you add a new tool? → bump CEILING deliberately in the same commit.
+    * Did you expand an existing Field description? → confirm the gain is
+      worth the per-turn token cost; if so, bump. If it was accidental
+      prose, trim instead.
+
+    Do NOT raise the ceiling to unstick CI without thinking about which
+    of those two cases applies.
+    """
+    from overleaf_mcp.tools import list_tools as _list_tools
+
+    tools = asyncio.run(_list_tools())
+
+    # Same serialization shape FastMCP sends over the wire: name +
+    # description + inputSchema. We don't bake in exact JSON formatting
+    # assumptions (separators, key order) — json.dumps with defaults is
+    # stable enough for a regression test.
+    payload = [
+        {
+            "name": t.name,
+            "description": t.description,
+            "inputSchema": t.inputSchema,
+        }
+        for t in tools
+    ]
+    raw = json.dumps(payload, ensure_ascii=False)
+    total_bytes = len(raw.encode("utf-8"))
+
+    # Baseline at plan-commit b3a4390: 14 382 bytes. Ceiling set a hair
+    # above at 15 100 (~5 % headroom) per plan's T7.5 target. Update this
+    # number deliberately with a one-line commit when legitimate growth
+    # happens.
+    CEILING = 15_100
+
+    assert total_bytes <= CEILING, (
+        f"tools/list schema is {total_bytes} bytes, exceeds ceiling {CEILING}. "
+        f"Either a tool was added (bump CEILING with a justifying commit) or "
+        f"a Field description drifted longer (trim it — per-turn token cost "
+        f"is real). See OPTIMIZATION_PLAN_V2.md T7.5 / item 6."
+    )
+
+
+def test_tools_list_schema_has_all_fifteen_tools():
+    """Companion assertion: if the byte-budget test above gets relaxed
+    to accommodate a new tool, this test is what prevents silent tool
+    removal — the count MUST go up, not stay the same.
+
+    As of 1.1.0: 15 tools. Tier-3 did not add or remove any.
+    """
+    from overleaf_mcp.tools import TOOLS, list_tools as _list_tools
+
+    tools = asyncio.run(_list_tools())
+    assert len(tools) == len(TOOLS) == 15, (
+        f"Expected 15 tools, got {len(tools)} via list_tools() and "
+        f"{len(TOOLS)} in the TOOLS dict. Either a tool was added (update "
+        f"this number AND bump CEILING in the byte-budget test) or one was "
+        f"removed (confirm that's intentional)."
+    )

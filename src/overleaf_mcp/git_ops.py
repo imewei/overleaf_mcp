@@ -365,7 +365,11 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
         # upstream 5xx). Permanent failures (auth, missing ref) skip the
         # retry — they'll just fail twice and waste a round-trip.
         if _is_transient_pull_error(msg):
-            delay = random.uniform(*_RETRY_DELAY_RANGE)
+            # nosec B311 -- jitter for retry backoff, not a security primitive.
+            # random.uniform is used here purely to de-synchronize retries
+            # across concurrent callers (avoid thundering-herd on a recovering
+            # Overleaf endpoint). No cryptographic property is required.
+            delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
             logger.info(
                 "pull failed transiently for %s (retry in %.2fs): %s",
                 project.project_id, delay, msg,
@@ -526,6 +530,14 @@ async def acquire_project(
     finally:
         if timing_on:
             elapsed_ms = (time.monotonic() - started) * 1000.0
+            # TODO(1.2.0 / HTTP transport): include the tool name in this line.
+            # Under stdio each MCP call flows through acquire_project exactly
+            # once, so elapsed_ms is already effectively per-tool — the caller
+            # correlates against the immediately preceding tool invocation.
+            # Once HTTP multiplexes clients, concurrent calls against the same
+            # project become indistinguishable by `mode` alone; add a
+            # `tool=<name>` field then. Requires threading the tool name down
+            # from tools.py (contextvars, or an explicit kwarg on acquire_project).
             logger.info(
                 "acquire_project project=%s mode=%s elapsed_ms=%.1f stale=%s",
                 project.project_id, mode, elapsed_ms,

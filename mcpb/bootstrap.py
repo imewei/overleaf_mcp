@@ -27,7 +27,10 @@ if _VENDOR.is_dir():
 # The source tree is shipped alongside vendor/ in the bundle. In dev mode
 # this import resolves via the editable install. In bundle mode it resolves
 # via the path we just added (vendor/overleaf_mcp/...).
-from overleaf_mcp.server import main
+#
+# E402 intentionally suppressed: the sys.path.insert above MUST run before
+# this import, so the module-level import cannot be hoisted to the top.
+from overleaf_mcp.server import main  # noqa: E402
 
 if __name__ == "__main__":
     main()
