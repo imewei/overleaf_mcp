@@ -21,6 +21,8 @@ import asyncio
 import json
 import logging
 import os
+import random
+import re
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -57,6 +59,41 @@ OVERLEAF_GIT_URL = os.environ.get("OVERLEAF_GIT_URL", "https://git.overleaf.com"
 _DEFAULT_PULL_TTL = 30.0
 _DEFAULT_GIT_TIMEOUT = 60.0
 _DEFAULT_SHALLOW_DEPTH = 1
+
+# One-shot retry on transient pull failures. The delay range is module-level
+# so tests can monkeypatch it to (0, 0) and run instantly. In production,
+# 0.5–1.5s gives the upstream a chance to recover from a hiccup without
+# hammering it on a sustained outage. Range is intentionally narrow — agentic
+# tool loops are interactive; long delays are worse than a fast stale-fallback.
+_RETRY_DELAY_RANGE: tuple[float, float] = (0.5, 1.5)
+
+# Pattern matchers for "transient" failures (worth one retry) vs "permanent"
+# failures (no retry — auth/ref mistakes won't fix themselves). Matching is
+# substring-on-stderr; we err on the side of NOT retrying when uncertain so
+# we never waste a round-trip on a clearly-broken request.
+_TRANSIENT_PATTERNS = re.compile(
+    r"(early EOF"
+    r"|connection reset"
+    r"|broken pipe"
+    r"|could not resolve host"
+    r"|temporary failure in name resolution"
+    r"|operation timed out"
+    r"|timed out"
+    r"|HTTP 5\d{2}"
+    r"|hung up unexpectedly"
+    r"|gnutls_handshake.*failed"
+    r"|ssl.*handshake.*failed)",
+    re.IGNORECASE,
+)
+
+
+def _is_transient_pull_error(message: str) -> bool:
+    """Classify a pull error message as worth one retry.
+
+    True = transient (network blip, upstream 5xx) — retry once.
+    False = permanent (bad auth, bad ref, bad permissions) — fail fast.
+    """
+    return bool(_TRANSIENT_PATTERNS.search(message))
 
 # Subprocess-level backstop for the asyncio timeout ceiling in
 # _run_blocking. If Git can't sustain LIMIT bytes/sec for TIME seconds,
@@ -298,9 +335,31 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
         origin.pull()
         _LAST_PULL[project.project_id] = now
     except GitCommandError as e:
+        msg = str(e).strip()
+        # One transparent retry for transient failures only (network blip,
+        # upstream 5xx). Permanent failures (auth, missing ref) skip the
+        # retry — they'll just fail twice and waste a round-trip.
+        if _is_transient_pull_error(msg):
+            delay = random.uniform(*_RETRY_DELAY_RANGE)
+            logger.info(
+                "pull failed transiently for %s (retry in %.2fs): %s",
+                project.project_id, delay, msg,
+            )
+            time.sleep(delay)
+            try:
+                origin.pull()
+                _LAST_PULL[project.project_id] = time.monotonic()
+                return repo
+            except GitCommandError as retry_e:
+                msg = str(retry_e).strip()
+                logger.warning(
+                    "pull failed twice for %s (giving up): %s",
+                    project.project_id, msg,
+                )
+                raise StaleRepoWarning(msg) from retry_e
         # Caller gets the local snapshot with a warning attached.
-        logger.warning("pull failed for %s: %s", project.project_id, e)
-        raise StaleRepoWarning(str(e).strip()) from e
+        logger.warning("pull failed for %s: %s", project.project_id, msg)
+        raise StaleRepoWarning(msg) from e
     return repo
 
 

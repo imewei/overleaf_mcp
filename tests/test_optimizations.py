@@ -597,6 +597,107 @@ def test_acquire_project_writers_still_serialize(
 
 
 # ---------------------------------------------------------------------------
+# Transient pull retry (one-shot with jitter)
+# ---------------------------------------------------------------------------
+
+
+def test_pull_retries_once_on_transient_failure(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """First pull fails with a transient error, second succeeds → no warning."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    # Skip the jitter sleep so the test runs fast
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.0, 0.0))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    transient = GitCommandError("pull", 1, b"", b"early EOF\nfatal: the remote end hung up unexpectedly")
+    fake_repo.remotes.origin.pull.side_effect = [transient, None]
+
+    with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
+        # Should NOT raise — the retry succeeds
+        repo = ensure_repo(fake_project)
+        assert repo is fake_repo
+
+    assert fake_repo.remotes.origin.pull.call_count == 2
+
+
+def test_pull_raises_stale_after_retry_exhausted(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Both attempts fail with transient error → StaleRepoWarning raised."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.0, 0.0))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    transient = GitCommandError("pull", 1, b"", b"connection reset by peer")
+    fake_repo.remotes.origin.pull.side_effect = transient
+
+    with (
+        patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        pytest.raises(StaleRepoWarning),
+    ):
+        ensure_repo(fake_project)
+
+    # Two attempts: original + retry
+    assert fake_repo.remotes.origin.pull.call_count == 2
+
+
+def test_pull_does_not_retry_on_permanent_failure(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Auth failure must NOT be retried — single attempt then StaleRepoWarning."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.0, 0.0))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    # The exact text Overleaf returns on a bad token
+    permanent = GitCommandError(
+        "pull", 128, b"",
+        b"fatal: Authentication failed for 'https://git.overleaf.com/...'",
+    )
+    fake_repo.remotes.origin.pull.side_effect = permanent
+
+    with (
+        patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        pytest.raises(StaleRepoWarning, match="Authentication failed"),
+    ):
+        ensure_repo(fake_project)
+
+    # Critical: no retry burned on a permanent failure
+    assert fake_repo.remotes.origin.pull.call_count == 1
+
+
+def test_is_transient_classification():
+    """Spot-check the classifier — transient vs permanent error patterns."""
+    # Transient patterns → True
+    assert git_ops._is_transient_pull_error("early EOF")
+    assert git_ops._is_transient_pull_error("connection reset by peer")
+    assert git_ops._is_transient_pull_error("Could not resolve host: git.overleaf.com")
+    assert git_ops._is_transient_pull_error("HTTP 502 Bad Gateway")
+    assert git_ops._is_transient_pull_error("HTTP 503")
+    assert git_ops._is_transient_pull_error("operation timed out")
+    assert git_ops._is_transient_pull_error("broken pipe")
+    assert git_ops._is_transient_pull_error(
+        "fatal: the remote end hung up unexpectedly"
+    )
+
+    # Permanent patterns → False (must NOT be retried)
+    assert not git_ops._is_transient_pull_error("Authentication failed")
+    assert not git_ops._is_transient_pull_error("could not read Username")
+    assert not git_ops._is_transient_pull_error(
+        "fatal: couldn't find remote ref refs/heads/main"
+    )
+    assert not git_ops._is_transient_pull_error("Permission denied")
+    assert not git_ops._is_transient_pull_error("invalid credentials")
+
+
+# ---------------------------------------------------------------------------
 # read_file max_bytes guardrail
 # ---------------------------------------------------------------------------
 
