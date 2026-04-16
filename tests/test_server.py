@@ -65,3 +65,13 @@ def test_get_diff_schema_has_context_and_truncation():
     assert "context_lines" in props
     assert "max_output_chars" in props
     assert "paths" in props
+
+
+def test_status_summary_in_tool_list():
+    """status_summary should be listed as an available tool."""
+    import asyncio
+    from overleaf_mcp.server import list_tools
+
+    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    names = [t.name for t in tools]
+    assert "status_summary" in names

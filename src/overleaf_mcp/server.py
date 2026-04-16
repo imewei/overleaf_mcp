@@ -453,6 +453,28 @@ async def list_tools() -> list[Tool]:
             },
         ),
 
+        Tool(
+            name="status_summary",
+            description="Get a comprehensive project status summary including file counts, last commit, and document structure.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_name": {
+                        "type": "string",
+                        "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
+                    },
+                },
+            },
+        ),
+
         # === UPDATE OPERATIONS ===
         Tool(
             name="edit_file",
@@ -864,6 +886,73 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         if truncated:
             result += "\n\n[diff truncated]"
         return result
+
+    elif name == "status_summary":
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
+        repo = ensure_repo(project)
+        repo_path = get_repo_path(project.project_id)
+
+        # File inventory
+        all_files = []
+        tex_files = []
+        for p in repo_path.rglob("*"):
+            if p.is_file() and not any(part.startswith(".") for part in p.parts):
+                rel = str(p.relative_to(repo_path))
+                all_files.append(rel)
+                if p.suffix == ".tex":
+                    tex_files.append(rel)
+
+        # Latest commit
+        try:
+            head = repo.head.commit
+            last_commit = (
+                f"{head.hexsha[:8]} | "
+                f"{head.committed_datetime.strftime('%Y-%m-%d %H:%M')} | "
+                f"{head.author.name} | {head.message.strip()[:80]}"
+            )
+        except ValueError:
+            last_commit = "(no commits)"
+
+        # Branch
+        try:
+            branch = repo.active_branch.name
+        except TypeError:
+            branch = "(detached HEAD)"
+
+        # Section structure of main .tex file
+        structure_lines = []
+        main_tex = None
+        for tf in tex_files:
+            full = repo_path / tf
+            text = full.read_text(errors="replace")
+            if r"\documentclass" in text or r"\begin{document}" in text:
+                main_tex = tf
+                sections = parse_sections(text)
+                for s in sections:
+                    structure_lines.append(f"  [{s['type']}] {s['title']}")
+                break
+
+        lines = [
+            f"Project: {project.name}",
+            f"Branch: {branch}",
+            f"Files: {len(all_files)} total, {len(tex_files)} .tex",
+            f"Last commit: {last_commit}",
+        ]
+        if main_tex:
+            lines.append(f"\nMain document: {main_tex}")
+            if structure_lines:
+                lines.append("Sections:")
+                lines.extend(structure_lines)
+            else:
+                lines.append("(no sections found)")
+        else:
+            lines.append("\n(no main .tex file detected)")
+
+        return "\n".join(lines)
 
     # === UPDATE OPERATIONS ===
 
