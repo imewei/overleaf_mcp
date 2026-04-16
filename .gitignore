@@ -51,5 +51,8 @@ htmlcov/
 .uv/
 uv.lock
 
+# Claude Code session artifacts (not part of the project)
+.claude-progress.md
 
-overleaf_config.json
+# Internal planning notes (historical, not part of the published docs)
+docs/superpowers/
