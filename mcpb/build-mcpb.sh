@@ -47,9 +47,12 @@ python3 -m pip install \
     --no-compile \
     "mcp>=1.0.0" "fastmcp>=3.0.0" "gitpython>=3.1.40" "pydantic>=2.0.0"
 
-# Strip bytecode + metadata clutter to shrink the archive.
+# Strip bytecode to shrink the archive. We intentionally DO NOT strip
+# *.dist-info — pydantic, fastmcp, and the mcp SDK all call
+# importlib.metadata.version(pkg) at runtime, and that API reads from
+# dist-info metadata. Removing it produces PackageNotFoundError at
+# bundle-load time. Verified 2026-04-16.
 find "$STAGE/server/vendor" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
-find "$STAGE/server/vendor" -type d -name '*.dist-info' -exec rm -rf {} + 2>/dev/null || true
 
 # 5) Validate + pack
 mkdir -p "$DIST"
