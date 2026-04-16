@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch
-from overleaf_mcp.server import resolve_project, ProjectConfig
+from overleaf_mcp.config import resolve_project, ProjectConfig
 
 
 def test_resolve_project_inline_credentials():
@@ -26,7 +26,7 @@ def test_resolve_project_inline_requires_both():
 def test_resolve_project_falls_back_to_config():
     """When no inline credentials, delegates to get_project_config."""
     fake = ProjectConfig(name="Test", project_id="p1", git_token="t1")
-    with patch("overleaf_mcp.server.get_project_config", return_value=fake) as mock:
+    with patch("overleaf_mcp.config.get_project_config", return_value=fake) as mock:
         result = resolve_project(project_name="myproj")
         mock.assert_called_once_with("myproj")
         assert result.project_id == "p1"
@@ -35,7 +35,7 @@ def test_resolve_project_falls_back_to_config():
 def test_list_history_since_until_params_in_schema():
     """list_history tool schema should include since and until parameters."""
     import asyncio
-    from overleaf_mcp.server import list_tools
+    from overleaf_mcp.tools import list_tools
 
     tools = asyncio.run(list_tools())
     history_tool = next(t for t in tools if t.name == "list_history")
@@ -47,7 +47,7 @@ def test_list_history_since_until_params_in_schema():
 def test_list_history_max_limit_200():
     """list_history should allow up to 200 commits."""
     import asyncio
-    from overleaf_mcp.server import list_tools
+    from overleaf_mcp.tools import list_tools
 
     tools = asyncio.run(list_tools())
     history_tool = next(t for t in tools if t.name == "list_history")
@@ -57,7 +57,7 @@ def test_list_history_max_limit_200():
 def test_get_diff_schema_has_context_and_truncation():
     """get_diff tool schema should include context_lines, max_output_chars, paths."""
     import asyncio
-    from overleaf_mcp.server import list_tools
+    from overleaf_mcp.tools import list_tools
 
     tools = asyncio.run(list_tools())
     diff_tool = next(t for t in tools if t.name == "get_diff")
@@ -70,7 +70,7 @@ def test_get_diff_schema_has_context_and_truncation():
 def test_status_summary_in_tool_list():
     """status_summary should be listed as an available tool."""
     import asyncio
-    from overleaf_mcp.server import list_tools
+    from overleaf_mcp.tools import list_tools
 
     tools = asyncio.run(list_tools())
     names = [t.name for t in tools]
@@ -80,7 +80,7 @@ def test_status_summary_in_tool_list():
 def test_write_tools_have_dry_run_and_push():
     """All write tools should have dry_run and push parameters."""
     import asyncio
-    from overleaf_mcp.server import list_tools
+    from overleaf_mcp.tools import list_tools
 
     tools = asyncio.run(list_tools())
     write_tool_names = ["edit_file", "rewrite_file", "update_section", "create_file", "delete_file"]
@@ -94,7 +94,7 @@ def test_write_tools_have_dry_run_and_push():
 def test_all_project_tools_have_inline_credentials():
     """All tools that accept project_name as a config key should also accept git_token and project_id."""
     import asyncio
-    from overleaf_mcp.server import list_tools
+    from overleaf_mcp.tools import list_tools
 
     # create_project uses project_name as a display label, not a config lookup key
     skip_tools = {"create_project"}

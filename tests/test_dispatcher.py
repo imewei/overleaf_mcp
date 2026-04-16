@@ -27,8 +27,9 @@ from pathlib import Path
 import pytest
 from git import Repo
 
-from overleaf_mcp import server
-from overleaf_mcp.server import execute_tool
+from overleaf_mcp import config as config_mod
+from overleaf_mcp import git_ops
+from overleaf_mcp.tools import execute_tool
 
 
 # ---------------------------------------------------------------------------
@@ -39,13 +40,13 @@ from overleaf_mcp.server import execute_tool
 @pytest.fixture(autouse=True)
 def _reset_module_state():
     """Prevent cache/lock leakage between tests."""
-    server._CONFIG_CACHE = None
-    server._LAST_PULL.clear()
-    server._PROJECT_LOCKS.clear()
+    config_mod._CONFIG_CACHE = None
+    git_ops._LAST_PULL.clear()
+    git_ops._PROJECT_LOCKS.clear()
     yield
-    server._CONFIG_CACHE = None
-    server._LAST_PULL.clear()
-    server._PROJECT_LOCKS.clear()
+    config_mod._CONFIG_CACHE = None
+    git_ops._LAST_PULL.clear()
+    git_ops._PROJECT_LOCKS.clear()
 
 
 PROJECT_ID = "test-project"
@@ -99,8 +100,10 @@ We did things.
     # Point the server at this setup. The cache dir is a sibling of the
     # bare repo so rglob-based file listers don't walk it.
     cache_dir = tmp_path / "overleaf_cache"
-    monkeypatch.setattr(server, "TEMP_DIR", str(cache_dir))
-    monkeypatch.setattr(server, "OVERLEAF_GIT_URL", f"file://{tmp_path}")
+    # NB: git_ops.TEMP_DIR is a local reference imported from config, so we
+    # patch it on git_ops (where get_repo_path reads it), not on config.
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(cache_dir))
+    monkeypatch.setattr(git_ops, "OVERLEAF_GIT_URL", f"file://{tmp_path}")
 
     # Write a matching config so resolve_project() can find the project
     config_path = tmp_path / "overleaf_config.json"
@@ -118,7 +121,7 @@ We did things.
             }
         )
     )
-    monkeypatch.setattr(server, "CONFIG_FILE", str(config_path))
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(config_path))
 
     # Configure git identity on the working clone so commits succeed in CI
     # where no global user.name/user.email is set.
@@ -186,7 +189,7 @@ def test_create_file_no_push(bare_repo):
 
 def test_list_projects_empty_when_no_config(tmp_path, monkeypatch):
     """If neither config file nor env vars are set, list_projects returns help."""
-    monkeypatch.setattr(server, "CONFIG_FILE", str(tmp_path / "nonexistent.json"))
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(tmp_path / "nonexistent.json"))
     monkeypatch.delenv("OVERLEAF_PROJECT_ID", raising=False)
     monkeypatch.delenv("OVERLEAF_GIT_TOKEN", raising=False)
     result = run("list_projects", {})

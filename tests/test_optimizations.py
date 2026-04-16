@@ -21,17 +21,20 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from overleaf_mcp import server
-from overleaf_mcp.server import (
+from overleaf_mcp import config as config_mod
+from overleaf_mcp import git_ops
+from overleaf_mcp.config import (
     Config,
     ProjectConfig,
+    load_config,
+)
+from overleaf_mcp.git_ops import (
     StaleRepoWarning,
     ToolContext,
     _lock_for,
     _run_blocking,
     acquire_project,
     ensure_repo,
-    load_config,
 )
 from git import GitCommandError
 
@@ -44,20 +47,20 @@ from git import GitCommandError
 @pytest.fixture(autouse=True)
 def _reset_module_caches():
     """Clear module-level state before every test (test isolation)."""
-    server._CONFIG_CACHE = None
-    server._LAST_PULL.clear()
-    server._PROJECT_LOCKS.clear()
+    config_mod._CONFIG_CACHE = None
+    git_ops._LAST_PULL.clear()
+    git_ops._PROJECT_LOCKS.clear()
     yield
-    server._CONFIG_CACHE = None
-    server._LAST_PULL.clear()
-    server._PROJECT_LOCKS.clear()
+    config_mod._CONFIG_CACHE = None
+    git_ops._LAST_PULL.clear()
+    git_ops._PROJECT_LOCKS.clear()
 
 
 @pytest.fixture
 def tmp_config_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect CONFIG_FILE to a test-owned path under tmp_path."""
     path = tmp_path / "overleaf_config.json"
-    monkeypatch.setattr(server, "CONFIG_FILE", str(path))
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", str(path))
     return path
 
 
@@ -104,8 +107,8 @@ def test_load_config_memoizes_unchanged_file(tmp_config_file: Path):
     _write_config(tmp_config_file)
 
     with patch(
-        "overleaf_mcp.server._parse_config_file",
-        wraps=server._parse_config_file,
+        "overleaf_mcp.config._parse_config_file",
+        wraps=config_mod._parse_config_file,
     ) as spy:
         load_config()
         load_config()
@@ -138,12 +141,12 @@ def test_ensure_repo_skips_pull_within_ttl(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """Second call within TTL window must NOT trigger a second pull."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("OVERLEAF_PULL_TTL", "10")
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
-    with patch("overleaf_mcp.server.Repo", return_value=fake_repo):
+    with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
         ensure_repo(fake_project)
         ensure_repo(fake_project)
 
@@ -156,12 +159,12 @@ def test_ensure_repo_force_pull_bypasses_ttl(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """force_pull=True must pull even when the TTL cache would suppress it."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("OVERLEAF_PULL_TTL", "10")
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
-    with patch("overleaf_mcp.server.Repo", return_value=fake_repo):
+    with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
         ensure_repo(fake_project, force_pull=False)
         ensure_repo(fake_project, force_pull=True)
 
@@ -172,14 +175,14 @@ def test_ensure_repo_pulls_after_ttl_expiry(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """Expired TTL must re-trigger the pull."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("OVERLEAF_PULL_TTL", "5")
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
-    with patch("overleaf_mcp.server.Repo", return_value=fake_repo):
+    with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
         ensure_repo(fake_project)
-        server._LAST_PULL[fake_project.project_id] -= 10.0
+        git_ops._LAST_PULL[fake_project.project_id] -= 10.0
         ensure_repo(fake_project)
 
     assert fake_repo.remotes.origin.pull.call_count == 2
@@ -189,7 +192,7 @@ def test_ensure_repo_raises_stale_on_pull_failure(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """GitCommandError on pull must surface as StaleRepoWarning."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
     (tmp_path / fake_project.project_id).mkdir()
 
@@ -198,7 +201,7 @@ def test_ensure_repo_raises_stale_on_pull_failure(
         "pull", 1, b"", b"boom"
     )
     with (
-        patch("overleaf_mcp.server.Repo", return_value=fake_repo),
+        patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
         pytest.raises(StaleRepoWarning, match="boom"),
     ):
         ensure_repo(fake_project)
@@ -213,13 +216,13 @@ def test_acquire_project_yields_tool_context(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """Happy path yields a ToolContext with no warnings."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
 
     async def _run():
-        with patch("overleaf_mcp.server.ensure_repo", return_value=fake_repo):
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
             async with acquire_project(fake_project) as ctx:
                 assert isinstance(ctx, ToolContext)
                 assert ctx.repo is fake_repo
@@ -232,7 +235,7 @@ def test_acquire_project_falls_back_on_stale(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """On StaleRepoWarning, context yields local repo + warning in ctx.warnings."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
@@ -241,8 +244,8 @@ def test_acquire_project_falls_back_on_stale(
         raise StaleRepoWarning("network unreachable")
 
     async def _run():
-        with patch("overleaf_mcp.server.ensure_repo", side_effect=_raise_stale), \
-             patch("overleaf_mcp.server.Repo", return_value=fake_repo):
+        with patch("overleaf_mcp.git_ops.ensure_repo", side_effect=_raise_stale), \
+             patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
             async with acquire_project(fake_project) as ctx:
                 assert ctx.repo is fake_repo
                 assert len(ctx.warnings) == 1
@@ -256,7 +259,7 @@ def test_acquire_project_releases_lock_on_exception(
     fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """Lock must be released even if the body raises (context-manager invariant)."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
@@ -264,7 +267,7 @@ def test_acquire_project_releases_lock_on_exception(
     async def _run():
         lock = _lock_for(fake_project.project_id)
         with (
-            patch("overleaf_mcp.server.ensure_repo", return_value=fake_repo),
+            patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo),
             pytest.raises(RuntimeError, match="boom"),
         ):
             async with acquire_project(fake_project):
@@ -290,6 +293,57 @@ def test_toolcontext_wrap_appends_block():
     assert ctx.wrap("hello") == "hello\n\n⚠ one\n⚠ two"
 
 
+def test_toolcontext_wrap_envelope_off_by_default(monkeypatch: pytest.MonkeyPatch):
+    """Without OVERLEAF_STRUCTURED=1, no envelope is appended (back-compat)."""
+    monkeypatch.delenv("OVERLEAF_STRUCTURED", raising=False)
+    ctx = ToolContext(repo=MagicMock(), warnings=[])
+    assert ctx.wrap("hello") == "hello"
+    assert "<mcp-envelope>" not in ctx.wrap("hello")
+
+
+def test_toolcontext_wrap_envelope_ok_true_on_success(monkeypatch: pytest.MonkeyPatch):
+    """OVERLEAF_STRUCTURED=1 appends JSON envelope; ok=true for clean response."""
+    monkeypatch.setenv("OVERLEAF_STRUCTURED", "1")
+    ctx = ToolContext(repo=MagicMock(), warnings=[])
+    result = ctx.wrap("Edited and pushed 'main.tex'")
+    assert result.startswith("Edited and pushed 'main.tex'")  # human text preserved
+    assert "<mcp-envelope>" in result
+    # Parse the envelope to verify its contents
+    import re as _re
+    import json as _json
+    match = _re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result)
+    assert match is not None
+    envelope = _json.loads(match.group(1))
+    assert envelope == {"ok": True, "warnings": []}
+
+
+def test_toolcontext_wrap_envelope_ok_false_with_warnings(monkeypatch: pytest.MonkeyPatch):
+    """ok=false when warnings are present (stale-repo fallback)."""
+    monkeypatch.setenv("OVERLEAF_STRUCTURED", "1")
+    ctx = ToolContext(repo=MagicMock(), warnings=["⚠ could not refresh: boom"])
+    result = ctx.wrap("Content of 'main.tex'")
+    import re as _re
+    import json as _json
+    envelope = _json.loads(
+        _re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result).group(1)
+    )
+    assert envelope["ok"] is False
+    assert envelope["warnings"] == ["⚠ could not refresh: boom"]
+
+
+def test_toolcontext_wrap_envelope_ok_false_on_error_prefix(monkeypatch: pytest.MonkeyPatch):
+    """ok=false when the response begins with 'Error:'."""
+    monkeypatch.setenv("OVERLEAF_STRUCTURED", "1")
+    ctx = ToolContext(repo=MagicMock(), warnings=[])
+    result = ctx.wrap("Error: File 'x.tex' not found")
+    import re as _re
+    import json as _json
+    envelope = _json.loads(
+        _re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result).group(1)
+    )
+    assert envelope["ok"] is False
+
+
 # ---------------------------------------------------------------------------
 # Per-project lock serialization (concurrency race fix)
 # ---------------------------------------------------------------------------
@@ -305,7 +359,7 @@ def test_acquire_project_serializes_same_project(
     without the per-project lock, two parallel writers could both pass the
     TTL check and race on GitPython's index.
     """
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
@@ -324,7 +378,7 @@ def test_acquire_project_serializes_same_project(
             return tag
 
     async def _run():
-        with patch("overleaf_mcp.server.ensure_repo", return_value=fake_repo):
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
             results = await asyncio.gather(body("a"), body("b"), body("c"))
         assert sorted(results) == ["a", "b", "c"]
         # Critical invariant: the lock prevented parallel entry.
@@ -340,7 +394,7 @@ def test_acquire_project_independent_across_projects(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     """Locks are per-project, so different projects must not serialize."""
-    monkeypatch.setattr(server, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
 
     proj_a = ProjectConfig(name="a", project_id="pA", git_token="t")
     proj_b = ProjectConfig(name="b", project_id="pB", git_token="t")
@@ -367,7 +421,7 @@ def test_acquire_project_independent_across_projects(
             b_entered.set()
 
     async def _run():
-        with patch("overleaf_mcp.server.ensure_repo", return_value=fake_repo):
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
             await asyncio.gather(hold_a(), hold_b())
         assert overlap, "Different projects should not serialize on one lock"
 
