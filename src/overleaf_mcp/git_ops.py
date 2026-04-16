@@ -309,10 +309,17 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
             logger.info("cloning project %s (cold start)", project.project_id)
         repo_path.parent.mkdir(parents=True, exist_ok=True)
         repo = Repo.clone_from(git_url, repo_path, **clone_kwargs)
+        # Stamp user.name + user.email once at clone time so write tools
+        # don't pay a redundant config-writer fsync on every commit. The
+        # function is idempotent — see config_git_user docstring.
+        config_git_user(repo)
         _LAST_PULL[project.project_id] = time.monotonic()
         return repo
 
     repo = Repo(repo_path)
+    # Belt-and-braces for clones predating this change: stamp on every open.
+    # Idempotent fast path returns immediately if user.name is already set.
+    config_git_user(repo)
     origin = repo.remotes.origin
     if origin.url != git_url:
         origin.set_url(git_url)

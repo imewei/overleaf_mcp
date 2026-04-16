@@ -32,7 +32,6 @@ from .git_ops import (
     _lock_for,
     _run_blocking,
     acquire_project,
-    config_git_user,
     ensure_repo,
     get_repo_path,
     validate_path,
@@ -178,7 +177,6 @@ async def create_file(
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(content)
 
-        config_git_user(ctx.repo)
         ctx.repo.index.add([file_path])
         await _run_blocking(ctx.repo.index.commit, msg)
         if push:
@@ -651,7 +649,6 @@ async def edit_file(
         new_content = content.replace(old_string, new_string, 1)
         target_path.write_text(new_content)
 
-        config_git_user(ctx.repo)
         ctx.repo.index.add([file_path])
         await _run_blocking(ctx.repo.index.commit, msg)
         if push:
@@ -695,7 +692,6 @@ async def rewrite_file(
 
         target_path.write_text(content)
 
-        config_git_user(ctx.repo)
         ctx.repo.index.add([file_path])
         await _run_blocking(ctx.repo.index.commit, msg)
         if push:
@@ -779,7 +775,6 @@ async def update_section(
 
         target_path.write_text(new_file_content)
 
-        config_git_user(ctx.repo)
         ctx.repo.index.add([file_path])
         await _run_blocking(ctx.repo.index.commit, msg)
         if push:
@@ -863,7 +858,6 @@ async def delete_file(
                 f"No changes were written."
             )
 
-        config_git_user(ctx.repo)
         ctx.repo.index.remove([file_path])
         target_path.unlink()
         await _run_blocking(ctx.repo.index.commit, msg)

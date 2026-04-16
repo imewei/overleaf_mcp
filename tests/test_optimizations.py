@@ -597,6 +597,63 @@ def test_acquire_project_writers_still_serialize(
 
 
 # ---------------------------------------------------------------------------
+# Git user stamping at clone time (moved out of per-write-tool path)
+# ---------------------------------------------------------------------------
+
+
+def test_ensure_repo_stamps_user_on_fresh_clone(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A fresh clone MUST have user.name + user.email stamped immediately.
+
+    Before v2 this happened lazily inside every write tool's call to
+    config_git_user(ctx.repo). v2 stamps once at clone time so the write
+    path doesn't carry the redundant config-writer fsync.
+    """
+    from configparser import NoSectionError
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_GIT_AUTHOR_NAME", "Stamped User")
+    monkeypatch.setenv("OVERLEAF_GIT_AUTHOR_EMAIL", "stamped@test.local")
+
+    # Fresh clone: config has no [user] section
+    fresh_clone = _make_fake_repo()
+    fresh_clone.config_reader.return_value.get_value.side_effect = NoSectionError("user")
+    config_writer = MagicMock()
+    fresh_clone.config_writer.return_value.__enter__.return_value = config_writer
+
+    with patch("overleaf_mcp.git_ops.Repo.clone_from", return_value=fresh_clone):
+        ensure_repo(fake_project)
+
+    # The set_value calls should include both user.name and user.email
+    sets = [(c.args[0], c.args[1], c.args[2]) for c in config_writer.set_value.call_args_list]
+    assert ("user", "name", "Stamped User") in sets
+    assert ("user", "email", "stamped@test.local") in sets
+
+
+def test_ensure_repo_does_not_re_stamp_existing_user(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """An already-stamped repo MUST NOT have its user re-written."""
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()  # existing clone
+
+    existing = _make_fake_repo()
+    # config_reader().get_value("user", "name") returns successfully
+    existing.config_reader.return_value.get_value.return_value = "Already Set"
+    config_writer = MagicMock()
+    existing.config_writer.return_value.__enter__.return_value = config_writer
+
+    with patch("overleaf_mcp.git_ops.Repo", return_value=existing):
+        ensure_repo(fake_project)
+
+    # config_writer.set_value must NOT have been called — repo already had user
+    assert config_writer.set_value.call_count == 0, (
+        "ensure_repo re-stamped user.name on an already-configured repo"
+    )
+
+
+# ---------------------------------------------------------------------------
 # OVERLEAF_TIMING latency observability
 # ---------------------------------------------------------------------------
 
