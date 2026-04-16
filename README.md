@@ -30,6 +30,10 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that p
 - **LaTeX-Aware**: Understands document structure for section-based operations
 - **Auto-Push**: All write operations commit and push to Overleaf immediately
 - **Local Caching**: Fast access with local repository cache
+- **TTL-Cached Pulls**: Read-only tools reuse a fresh local snapshot for `OVERLEAF_PULL_TTL` seconds (default 30s) — an agent exploring a project pays ~1 network round-trip per burst, not per tool call
+- **Non-Blocking**: All Git/subprocess work runs off the asyncio event loop, so a slow push never stalls the MCP stdio reader
+- **Bounded Hangs**: Every Git op has a hard timeout ceiling (`OVERLEAF_GIT_TIMEOUT`, default 60s) — a wedged connection can no longer freeze the server indefinitely
+- **Visible Staleness**: If a refresh attempt fails but a local snapshot is available, the tool response appends a `⚠ could not refresh from Overleaf: ...` warning instead of silently serving stale data
 
 ---
 
@@ -268,6 +272,24 @@ Once configured, you can ask the AI assistant:
 | `OVERLEAF_GIT_TOKEN` | - | Default git token (single-project mode) |
 | `OVERLEAF_GIT_AUTHOR_NAME` | `Overleaf MCP` | Git commit author name |
 | `OVERLEAF_GIT_AUTHOR_EMAIL` | `mcp@overleaf.local` | Git commit author email |
+| `OVERLEAF_PULL_TTL` | `30` | Seconds within which a successful pull is considered fresh enough to skip on subsequent read-only tools. Write tools (`edit_file`, `rewrite_file`, `create_file`, `update_section`, `delete_file`) and `sync_project` always bypass this cache. Set to `0` to pull on every tool call (previous behavior). |
+| `OVERLEAF_GIT_TIMEOUT` | `60` | Hard upper bound (seconds) on any blocking Git operation. Protects against an unresponsive Overleaf endpoint hanging the server. |
+| `GIT_HTTP_LOW_SPEED_LIMIT` | `1000` | Bytes/sec floor — Git aborts if throughput drops below this. |
+| `GIT_HTTP_LOW_SPEED_TIME` | `30` | Seconds that throughput must stay below the limit before aborting. |
+
+### Performance Notes
+
+As of v1.1, the server caches successful `git pull` operations for
+`OVERLEAF_PULL_TTL` seconds (default 30). This means an agent exploring a
+project with multiple read tools (`list_files` → `read_file` → `get_sections` → ...)
+pays at most **one** network round-trip across the burst. Write tools always
+force a fresh pull to avoid committing on a stale base. Call `sync_project`
+any time you need an explicit, bypass-the-cache refresh.
+
+If an attempted pull fails but a local snapshot is available, the tool
+returns its response against the cached copy and appends a
+`⚠ could not refresh from Overleaf: ...` warning line. This makes silent
+staleness impossible — callers always know whether data is live or cached.
 
 ---
 
