@@ -75,3 +75,17 @@ def test_status_summary_in_tool_list():
     tools = asyncio.get_event_loop().run_until_complete(list_tools())
     names = [t.name for t in tools]
     assert "status_summary" in names
+
+
+def test_write_tools_have_dry_run_and_push():
+    """All write tools should have dry_run and push parameters."""
+    import asyncio
+    from overleaf_mcp.server import list_tools
+
+    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    write_tool_names = ["edit_file", "rewrite_file", "update_section", "create_file", "delete_file"]
+    for tool_name in write_tool_names:
+        tool = next(t for t in tools if t.name == tool_name)
+        props = tool.inputSchema["properties"]
+        assert "dry_run" in props, f"{tool_name} missing dry_run"
+        assert "push" in props, f"{tool_name} missing push"

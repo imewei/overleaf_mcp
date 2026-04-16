@@ -277,6 +277,22 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
                     },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, report what would happen without making changes (default: false)",
+                    },
+                    "push": {
+                        "type": "boolean",
+                        "description": "Whether to push after committing (default: true)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
+                    },
                 },
                 "required": ["file_path", "content"],
             },
@@ -506,6 +522,22 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
                     },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, report what would happen without making changes (default: false)",
+                    },
+                    "push": {
+                        "type": "boolean",
+                        "description": "Whether to push after committing (default: true)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
+                    },
                 },
                 "required": ["file_path", "old_string", "new_string"],
             },
@@ -534,6 +566,22 @@ async def list_tools() -> list[Tool]:
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, report what would happen without making changes (default: false)",
+                    },
+                    "push": {
+                        "type": "boolean",
+                        "description": "Whether to push after committing (default: true)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
                 "required": ["file_path", "content"],
@@ -567,6 +615,22 @@ async def list_tools() -> list[Tool]:
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, report what would happen without making changes (default: false)",
+                    },
+                    "push": {
+                        "type": "boolean",
+                        "description": "Whether to push after committing (default: true)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
                 "required": ["file_path", "section_title", "new_content"],
@@ -607,6 +671,22 @@ async def list_tools() -> list[Tool]:
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "If true, report what would happen without making changes (default: false)",
+                    },
+                    "push": {
+                        "type": "boolean",
+                        "description": "Whether to push after committing (default: true)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
                 "required": ["file_path"],
@@ -667,35 +747,42 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         )
 
     elif name == "create_file":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
         file_path = arguments["file_path"]
         content = arguments["content"]
         commit_message = arguments.get("commit_message", f"Add {file_path}")
+        dry_run = arguments.get("dry_run", False)
+        push = arguments.get("push", True)
 
-        # Validate and create path
         target_path = validate_path(repo_path, file_path)
 
         if target_path.exists():
             return f"Error: File '{file_path}' already exists. Use edit_file to modify it."
 
-        # Create parent directories if needed
-        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if dry_run:
+            return (
+                f"Dry run: would create '{file_path}'\n"
+                f"Content size: {len(content)} chars\n"
+                f"No changes were written."
+            )
 
-        # Write file
+        target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(content)
 
-        # Configure git user if needed
         config_git_user(repo)
-
-        # Git operations
         repo.index.add([file_path])
         repo.index.commit(commit_message)
-        repo.remotes.origin.push()
+        if push:
+            repo.remotes.origin.push()
 
-        return f"Created and pushed '{file_path}'"
+        return f"Created{' and pushed' if push else ''} '{file_path}'"
 
     # === READ OPERATIONS ===
 
@@ -957,7 +1044,11 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     # === UPDATE OPERATIONS ===
 
     elif name == "edit_file":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
@@ -965,6 +1056,8 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         old_string = arguments["old_string"]
         new_string = arguments["new_string"]
         commit_message = arguments.get("commit_message", f"Edit {file_path}")
+        dry_run = arguments.get("dry_run", False)
+        push = arguments.get("push", True)
 
         target_path = validate_path(repo_path, file_path)
 
@@ -973,62 +1066,77 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
 
         content = target_path.read_text()
 
-        # Check if old_string exists
         if old_string not in content:
-            # Show a preview of the file to help debug
             preview = content[:500] + "..." if len(content) > 500 else content
             return f"Error: old_string not found in '{file_path}'. File preview:\n{preview}"
 
-        # Check for uniqueness
         count = content.count(old_string)
         if count > 1:
             return f"Error: old_string appears {count} times in '{file_path}'. Make it more specific to match exactly once."
 
-        # Perform the replacement
-        new_content = content.replace(old_string, new_string, 1)
+        if dry_run:
+            return (
+                f"Dry run: would edit '{file_path}'\n"
+                f"Replacing {len(old_string)} chars with {len(new_string)} chars\n"
+                f"No changes were written."
+            )
 
-        # Write file
+        new_content = content.replace(old_string, new_string, 1)
         target_path.write_text(new_content)
 
-        # Configure git user if needed
         config_git_user(repo)
-
-        # Git operations
         repo.index.add([file_path])
         repo.index.commit(commit_message)
-        repo.remotes.origin.push()
+        if push:
+            repo.remotes.origin.push()
 
-        return f"Edited and pushed '{file_path}'"
+        return f"Edited{' and pushed' if push else ''} '{file_path}'"
 
     elif name == "rewrite_file":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
         file_path = arguments["file_path"]
         content = arguments["content"]
         commit_message = arguments.get("commit_message", f"Rewrite {file_path}")
+        dry_run = arguments.get("dry_run", False)
+        push = arguments.get("push", True)
 
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():
             return f"Error: File '{file_path}' not found. Use create_file to create it."
 
-        # Write file
+        if dry_run:
+            existing_size = target_path.stat().st_size
+            return (
+                f"Dry run: would rewrite '{file_path}'\n"
+                f"Existing size: {existing_size} bytes\n"
+                f"New size: {len(content)} chars\n"
+                f"No changes were written."
+            )
+
         target_path.write_text(content)
 
-        # Configure git user if needed
         config_git_user(repo)
-
-        # Git operations
         repo.index.add([file_path])
         repo.index.commit(commit_message)
-        repo.remotes.origin.push()
+        if push:
+            repo.remotes.origin.push()
 
-        return f"Rewrote and pushed '{file_path}'"
+        return f"Rewrote{' and pushed' if push else ''} '{file_path}'"
 
     elif name == "update_section":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
@@ -1036,6 +1144,8 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         section_title = arguments["section_title"]
         new_content = arguments["new_content"]
         commit_message = arguments.get("commit_message", f"Update section '{section_title}'")
+        dry_run = arguments.get("dry_run", False)
+        push = arguments.get("push", True)
 
         target_path = validate_path(repo_path, file_path)
 
@@ -1045,7 +1155,6 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         content = target_path.read_text()
         sections = parse_sections(content)
 
-        # Find the section
         section = None
         for s in sections:
             if s["title"].lower() == section_title.lower():
@@ -1056,7 +1165,6 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
             available = ", ".join(f"'{s['title']}'" for s in sections)
             return f"Section '{section_title}' not found. Available sections: {available}"
 
-        # Find where the section header ends
         header_match = re.search(
             rf"\\{section['type']}\*?\{{{re.escape(section['title'])}\}}",
             content
@@ -1064,27 +1172,31 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         if not header_match:
             return f"Could not locate section header for '{section_title}'"
 
-        header_end = header_match.end()
+        if dry_run:
+            old_len = section["end_pos"] - header_match.end()
+            return (
+                f"Dry run: would update section '{section_title}' in '{file_path}'\n"
+                f"Old section body: {old_len} chars\n"
+                f"New section body: {len(new_content)} chars\n"
+                f"No changes were written."
+            )
 
-        # Build new content
+        header_end = header_match.end()
         new_file_content = (
             content[:header_end] +
             "\n" + new_content.strip() + "\n" +
             content[section["end_pos"]:]
         )
 
-        # Write file
         target_path.write_text(new_file_content)
 
-        # Configure git user if needed
         config_git_user(repo)
-
-        # Git operations
         repo.index.add([file_path])
         repo.index.commit(commit_message)
-        repo.remotes.origin.push()
+        if push:
+            repo.remotes.origin.push()
 
-        return f"Updated section '{section_title}' and pushed"
+        return f"Updated section '{section_title}'{' and pushed' if push else ''}"
 
     elif name == "sync_project":
         project = get_project_config(arguments.get("project_name"))
@@ -1113,28 +1225,39 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
     # === DELETE OPERATIONS ===
 
     elif name == "delete_file":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
         repo_path = get_repo_path(project.project_id)
 
         file_path = arguments["file_path"]
         commit_message = arguments.get("commit_message", f"Delete {file_path}")
+        dry_run = arguments.get("dry_run", False)
+        push = arguments.get("push", True)
 
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():
             return f"Error: File '{file_path}' not found"
 
-        # Configure git user if needed
-        config_git_user(repo)
+        if dry_run:
+            size = target_path.stat().st_size
+            return (
+                f"Dry run: would delete '{file_path}' ({size} bytes)\n"
+                f"No changes were written."
+            )
 
-        # Git remove
+        config_git_user(repo)
         repo.index.remove([file_path])
         target_path.unlink()
         repo.index.commit(commit_message)
-        repo.remotes.origin.push()
+        if push:
+            repo.remotes.origin.push()
 
-        return f"Deleted and pushed '{file_path}'"
+        return f"Deleted{' and pushed' if push else ''} '{file_path}'"
 
     else:
         return f"Unknown tool: {name}"
