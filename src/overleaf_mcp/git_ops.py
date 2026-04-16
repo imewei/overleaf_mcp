@@ -470,8 +470,15 @@ async def acquire_project(
     safe-and-fast read path. Write tools must pass ``mode="write"``
     explicitly. Mixing ``force_pull=False`` with ``mode="write"`` is
     permitted but unusual — write tools normally pair both flags.
+
+    Observability: when ``OVERLEAF_TIMING=1`` is set, emits a structured
+    INFO log line on context exit with project, mode, elapsed_ms, and
+    stale flag. Costs nothing when off (one env-var lookup per call).
     """
     rwlock = _rwlock_for(project.project_id)
+    timing_on = os.environ.get("OVERLEAF_TIMING") == "1"
+    started = time.monotonic() if timing_on else 0.0
+    stale = False
 
     # Phase 1: refresh under exclusive (writer) lock.
     warnings: list[str] = []
@@ -484,11 +491,21 @@ async def acquire_project(
             repo_path = get_repo_path(project.project_id)
             repo = Repo(repo_path)
             warnings = [f"⚠ could not refresh from Overleaf: {w}"]
+            stale = True
 
     # Phase 2: tool body — shared for read, exclusive for write.
     body_lock = rwlock.shared() if mode == "read" else rwlock.exclusive()
-    async with body_lock:
-        yield ToolContext(repo=repo, warnings=warnings)
+    try:
+        async with body_lock:
+            yield ToolContext(repo=repo, warnings=warnings)
+    finally:
+        if timing_on:
+            elapsed_ms = (time.monotonic() - started) * 1000.0
+            logger.info(
+                "acquire_project project=%s mode=%s elapsed_ms=%.1f stale=%s",
+                project.project_id, mode, elapsed_ms,
+                "true" if stale else "false",
+            )
 
 
 def config_git_user(repo: Repo) -> None:

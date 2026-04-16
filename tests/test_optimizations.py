@@ -597,6 +597,107 @@ def test_acquire_project_writers_still_serialize(
 
 
 # ---------------------------------------------------------------------------
+# OVERLEAF_TIMING latency observability
+# ---------------------------------------------------------------------------
+
+
+def test_timing_log_emitted_when_env_set(
+    fake_project: ProjectConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    """OVERLEAF_TIMING=1 emits a structured per-acquire log line."""
+    import logging
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_TIMING", "1")
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    caplog.set_level(logging.INFO, logger="overleaf_mcp.git_ops")
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            async with acquire_project(fake_project, mode="read"):
+                pass
+
+    asyncio.run(_run())
+
+    timing_lines = [r.message for r in caplog.records if "acquire_project" in r.message]
+    assert timing_lines, "No timing log line emitted with OVERLEAF_TIMING=1"
+    line = timing_lines[-1]
+    # Structured fields — agents grep these
+    assert "project=p123" in line
+    assert "mode=read" in line
+    assert "elapsed_ms=" in line
+    assert "stale=false" in line  # happy path → not stale
+
+
+def test_timing_log_silent_when_env_unset(
+    fake_project: ProjectConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Without OVERLEAF_TIMING=1, no timing line is emitted (back-compat)."""
+    import logging
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.delenv("OVERLEAF_TIMING", raising=False)
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    caplog.set_level(logging.INFO, logger="overleaf_mcp.git_ops")
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            async with acquire_project(fake_project, mode="read"):
+                pass
+
+    asyncio.run(_run())
+
+    timing_lines = [r.message for r in caplog.records if "acquire_project " in r.message]
+    assert not timing_lines, (
+        f"Timing line leaked without OVERLEAF_TIMING=1: {timing_lines}"
+    )
+
+
+def test_timing_log_marks_stale_on_fallback(
+    fake_project: ProjectConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+):
+    """When the stale-snapshot path fires, the timing line records stale=true."""
+    import logging
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_TIMING", "1")
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    caplog.set_level(logging.INFO, logger="overleaf_mcp.git_ops")
+
+    def _raise_stale(_project, *, force_pull=False):
+        raise StaleRepoWarning("network unreachable")
+
+    async def _run():
+        with (
+            patch("overleaf_mcp.git_ops.ensure_repo", side_effect=_raise_stale),
+            patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        ):
+            async with acquire_project(fake_project, mode="read"):
+                pass
+
+    asyncio.run(_run())
+
+    timing_lines = [r.message for r in caplog.records if "acquire_project " in r.message]
+    assert timing_lines, "No timing line emitted on stale path"
+    assert "stale=true" in timing_lines[-1]
+
+
+# ---------------------------------------------------------------------------
 # Transient pull retry (one-shot with jitter)
 # ---------------------------------------------------------------------------
 
