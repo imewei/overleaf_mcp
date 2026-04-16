@@ -30,3 +30,25 @@ def test_resolve_project_falls_back_to_config():
         result = resolve_project(project_name="myproj")
         mock.assert_called_once_with("myproj")
         assert result.project_id == "p1"
+
+
+def test_list_history_since_until_params_in_schema():
+    """list_history tool schema should include since and until parameters."""
+    import asyncio
+    from overleaf_mcp.server import list_tools
+
+    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    history_tool = next(t for t in tools if t.name == "list_history")
+    props = history_tool.inputSchema["properties"]
+    assert "since" in props
+    assert "until" in props
+
+
+def test_list_history_max_limit_200():
+    """list_history should allow up to 200 commits."""
+    import asyncio
+    from overleaf_mcp.server import list_tools
+
+    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    history_tool = next(t for t in tools if t.name == "list_history")
+    assert "200" in history_tool.inputSchema["properties"]["limit"]["description"]

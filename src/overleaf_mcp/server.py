@@ -377,15 +377,31 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of commits to show (default: 20, max: 100)",
+                        "description": "Maximum number of commits to show (default: 20, max: 200)",
                     },
                     "file_path": {
                         "type": "string",
                         "description": "Filter history to a specific file",
                     },
+                    "since": {
+                        "type": "string",
+                        "description": "Show commits after this date (e.g., '2025-01-01', '2.weeks')",
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": "Show commits before this date (e.g., '2025-06-01', '1.month')",
+                    },
                     "project_name": {
                         "type": "string",
                         "description": "Project identifier from config (uses default if not specified)",
+                    },
+                    "git_token": {
+                        "type": "string",
+                        "description": "Git token override (bypasses config file)",
+                    },
+                    "project_id": {
+                        "type": "string",
+                        "description": "Project ID override (bypasses config file)",
                     },
                 },
             },
@@ -748,27 +764,36 @@ async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
         return f"Content of section '{section_title}':\n\n{section_content}"
 
     elif name == "list_history":
-        project = get_project_config(arguments.get("project_name"))
+        project = resolve_project(
+            arguments.get("project_name"),
+            arguments.get("git_token"),
+            arguments.get("project_id"),
+        )
         repo = ensure_repo(project)
 
-        limit = min(arguments.get("limit", 20), 100)
+        limit = min(arguments.get("limit", 20), 200)
         file_path = arguments.get("file_path")
+        since = arguments.get("since")
+        until = arguments.get("until")
 
-        kwargs = {"max_count": limit}
+        kwargs: dict[str, Any] = {"max_count": limit}
         if file_path:
             kwargs["paths"] = file_path
+        if since:
+            kwargs["after"] = since
+        if until:
+            kwargs["before"] = until
 
         commits = list(repo.iter_commits(**kwargs))
 
         if not commits:
             return "No commits found"
 
-        lines = ["Commit history:"]
+        lines = [f"Commit history (showing {len(commits)}/{limit}):"]
         for c in commits:
             date = c.committed_datetime.strftime("%Y-%m-%d %H:%M")
-            lines.append(f"\n{c.hexsha[:8]} - {date}")
-            lines.append(f"  Author: {c.author.name} <{c.author.email}>")
-            lines.append(f"  Message: {c.message.strip()[:100]}")
+            lines.append(f"\n{c.hexsha[:8]} | {date} | {c.author.name}")
+            lines.append(f"  {c.message.strip()[:100]}")
 
         return "\n".join(lines)
 
