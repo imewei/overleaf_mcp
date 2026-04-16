@@ -149,12 +149,14 @@ def ensure_repo(project: ProjectConfig) -> Repo:
 
     if repo_path.exists():
         repo = Repo(repo_path)
+        # Update remote URL to use current credentials
+        origin = repo.remotes.origin
+        if origin.url != git_url:
+            origin.set_url(git_url)
         # Pull latest changes
         try:
-            origin = repo.remotes.origin
             origin.pull()
-        except GitCommandError as e:
-            # If pull fails, try to continue with existing state
+        except GitCommandError:
             pass
         return repo
 
@@ -1327,7 +1329,7 @@ def config_git_user(repo: Repo) -> None:
     """Configure git user if not already set."""
     try:
         repo.config_reader().get_value("user", "name")
-    except:
+    except Exception:
         name = os.environ.get("OVERLEAF_GIT_AUTHOR_NAME", "Overleaf MCP")
         email = os.environ.get("OVERLEAF_GIT_AUTHOR_EMAIL", "mcp@overleaf.local")
 

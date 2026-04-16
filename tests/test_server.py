@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from overleaf_mcp.server import resolve_project, ProjectConfig
 
 
@@ -37,7 +37,7 @@ def test_list_history_since_until_params_in_schema():
     import asyncio
     from overleaf_mcp.server import list_tools
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     history_tool = next(t for t in tools if t.name == "list_history")
     props = history_tool.inputSchema["properties"]
     assert "since" in props
@@ -49,7 +49,7 @@ def test_list_history_max_limit_200():
     import asyncio
     from overleaf_mcp.server import list_tools
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     history_tool = next(t for t in tools if t.name == "list_history")
     assert "200" in history_tool.inputSchema["properties"]["limit"]["description"]
 
@@ -59,7 +59,7 @@ def test_get_diff_schema_has_context_and_truncation():
     import asyncio
     from overleaf_mcp.server import list_tools
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     diff_tool = next(t for t in tools if t.name == "get_diff")
     props = diff_tool.inputSchema["properties"]
     assert "context_lines" in props
@@ -72,7 +72,7 @@ def test_status_summary_in_tool_list():
     import asyncio
     from overleaf_mcp.server import list_tools
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     names = [t.name for t in tools]
     assert "status_summary" in names
 
@@ -82,7 +82,7 @@ def test_write_tools_have_dry_run_and_push():
     import asyncio
     from overleaf_mcp.server import list_tools
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     write_tool_names = ["edit_file", "rewrite_file", "update_section", "create_file", "delete_file"]
     for tool_name in write_tool_names:
         tool = next(t for t in tools if t.name == tool_name)
@@ -99,7 +99,7 @@ def test_all_project_tools_have_inline_credentials():
     # create_project uses project_name as a display label, not a config lookup key
     skip_tools = {"create_project"}
 
-    tools = asyncio.get_event_loop().run_until_complete(list_tools())
+    tools = asyncio.run(list_tools())
     for tool in tools:
         if tool.name in skip_tools:
             continue
