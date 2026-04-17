@@ -15,6 +15,7 @@ This module owns everything that touches Git or the event loop:
 No MCP protocol knowledge lives here — that stays in ``tools.py`` and
 ``server.py``.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -95,6 +96,7 @@ def _is_transient_pull_error(message: str) -> bool:
     False = permanent (bad auth, bad ref, bad permissions) — fail fast.
     """
     return bool(_TRANSIENT_PATTERNS.search(message))
+
 
 # Subprocess-level backstop for the asyncio timeout ceiling in
 # _run_blocking. If Git can't sustain LIMIT bytes/sec for TIME seconds,
@@ -315,7 +317,7 @@ def _build_git_url(project: ProjectConfig) -> str:
     """
     base = OVERLEAF_GIT_URL
     if base.startswith("https://"):
-        host = base[len("https://"):]
+        host = base[len("https://") :]
         return f"https://git:{project.git_token}@{host}/{project.project_id}"
     # file:// and other schemes — auth is meaningless, just append project id.
     return f"{base.rstrip('/')}/{project.project_id}"
@@ -369,7 +371,8 @@ def ensure_repo(
         if clone_kwargs:
             logger.info(
                 "cloning project %s (cold start, shallow depth=%s)",
-                project.project_id, clone_kwargs["depth"],
+                project.project_id,
+                clone_kwargs["depth"],
             )
         else:
             logger.info("cloning project %s (cold start)", project.project_id)
@@ -396,13 +399,17 @@ def ensure_repo(
         # Within TTL window — skip the network entirely.
         logger.debug(
             "pull suppressed by TTL (age=%.1fs, ttl=%.1fs, project=%s)",
-            now - last, _pull_ttl(), project.project_id,
+            now - last,
+            _pull_ttl(),
+            project.project_id,
         )
         return repo
 
     logger.debug(
         "pulling project %s (force=%s, age=%.1fs)",
-        project.project_id, force_pull, now - last,
+        project.project_id,
+        force_pull,
+        now - last,
     )
     try:
         origin.pull()
@@ -419,14 +426,16 @@ def ensure_repo(
                 raise _TransientPullError(redacted_msg) from e
             # Inline sync retry — kept for direct callers (tests,
             # sync_project) that aren't in the async-lock path.
-            # nosec B311 -- jitter for retry backoff, not a security primitive.
-            # random.uniform is used here purely to de-synchronize retries
+            # Bandit B311 rationale: jitter for retry backoff, not a security
+            # primitive. random.uniform is used purely to de-synchronize retries
             # across concurrent callers (avoid thundering-herd on a recovering
             # Overleaf endpoint). No cryptographic property is required.
             delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
             logger.info(
                 "pull failed transiently for %s (retry in %.2fs): %s",
-                project.project_id, delay, redacted_msg,
+                project.project_id,
+                delay,
+                redacted_msg,
             )
             time.sleep(delay)
             try:
@@ -437,7 +446,8 @@ def ensure_repo(
                 retry_redacted = _redact_url(str(retry_e).strip())
                 logger.warning(
                     "pull failed twice for %s (giving up): %s",
-                    project.project_id, retry_redacted,
+                    project.project_id,
+                    retry_redacted,
                 )
                 raise StaleRepoWarning(retry_redacted) from retry_e
         # Caller gets the local snapshot with a warning attached.
@@ -495,6 +505,7 @@ class ToolContext:
             ...
             return ctx.wrap("tool result string")
     """
+
     repo: Repo
     warnings: list[str] = field(default_factory=list)
 
@@ -518,10 +529,7 @@ class ToolContext:
         if self.warnings:
             out += "\n\n" + "\n".join(self.warnings)
         if os.environ.get("OVERLEAF_STRUCTURED") == "1":
-            ok = (
-                not result.lstrip().startswith("Error:")
-                and not self.warnings
-            )
+            ok = not result.lstrip().startswith("Error:") and not self.warnings
             envelope = {"ok": ok, "warnings": self.warnings}
             out += f"\n\n<mcp-envelope>{json.dumps(envelope)}</mcp-envelope>"
         return out
@@ -550,9 +558,7 @@ async def _refresh_once(
     unhandled exception.
     """
     try:
-        repo = await _run_blocking(
-            ensure_repo, project, force_pull=force_pull, _retry_sync=False
-        )
+        repo = await _run_blocking(ensure_repo, project, force_pull=force_pull, _retry_sync=False)
         return repo, [], False, None
     except _TransientPullError as te:
         return None, [], False, str(te).strip()
@@ -573,25 +579,22 @@ async def _refresh_once(
         repo_path = get_repo_path(project.project_id)
         if not repo_path.exists():
             logger.warning(
-                "cold-start clone for %s timed out after %.1fs; no local "
-                "snapshot available", project.project_id, timeout_s,
+                "cold-start clone for %s timed out after %.1fs; no local snapshot available",
+                project.project_id,
+                timeout_s,
             )
             raise
         logger.warning(
             "pull for %s timed out after %.1fs; serving local snapshot",
-            project.project_id, timeout_s,
+            project.project_id,
+            timeout_s,
         )
         repo = Repo(repo_path)
-        warning = (
-            f"⚠ could not refresh from Overleaf: "
-            f"pull timed out after {timeout_s:.1f}s"
-        )
+        warning = f"⚠ could not refresh from Overleaf: pull timed out after {timeout_s:.1f}s"
         return repo, [warning], True, None
 
 
-def _emit_timing_log(
-    project: ProjectConfig, mode: str, elapsed_ms: float, stale: bool
-) -> None:
+def _emit_timing_log(project: ProjectConfig, mode: str, elapsed_ms: float, stale: bool) -> None:
     """Emit the ``OVERLEAF_TIMING=1`` log line as JSON.
 
     Format (stable interface — see docs/API.md#observability):
@@ -684,11 +687,13 @@ async def acquire_project(
         # lock so the 0.5–1.5 s backoff doesn't starve concurrent tools
         # that would otherwise be blocked on the writer lock. ---
         if transient_msg is not None:
-            # nosec B311 -- jitter for retry backoff, not a security primitive.
+            # Bandit B311 rationale: jitter for retry backoff, not a security primitive.
             delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
             logger.info(
                 "pull failed transiently for %s (retry in %.2fs): %s",
-                project.project_id, delay, transient_msg,
+                project.project_id,
+                delay,
+                transient_msg,
             )
             await asyncio.sleep(delay)
 
@@ -700,13 +705,14 @@ async def acquire_project(
                     # Second transient failure → promote to stale fallback.
                     logger.warning(
                         "pull failed twice for %s (giving up): %s",
-                        project.project_id, transient2,
+                        project.project_id,
+                        transient2,
                     )
                     repo = Repo(get_repo_path(project.project_id))
                     warnings = [f"⚠ could not refresh from Overleaf: {transient2}"]
                     stale = True
                 if mode == "write":
-                    assert repo is not None  # nosec B101 -- see note above
+                    assert repo is not None  # nosec B101  # see note above
                     yield ToolContext(repo=repo, warnings=warnings)
                     return
 

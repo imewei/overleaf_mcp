@@ -18,6 +18,7 @@ The ``OVERLEAF_GIT_URL`` env var points at ``file://{tmp_path}/bare.git``
 so ``ensure_repo`` can clone/pull/push against it exactly like the real
 Overleaf endpoint, but in process with no auth.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -143,7 +144,9 @@ def run(name: str, args: dict) -> str:
 
 def test_create_project_returns_snip_url():
     """create_project builds a data: URL for the browser — no git touch."""
-    result = run("create_project", {"content": r"\documentclass{article}\begin{document}X\end{document}"})
+    result = run(
+        "create_project", {"content": r"\documentclass{article}\begin{document}X\end{document}"}
+    )
     assert "open this URL in your browser" in result
     assert "overleaf.com/docs" in result
 
@@ -286,7 +289,10 @@ def test_get_diff_no_differences(bare_repo):
 
 def test_get_diff_after_edit(bare_repo):
     """After an edit_file, a HEAD~1..HEAD diff shows the change."""
-    run("edit_file", {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."})
+    run(
+        "edit_file",
+        {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."},
+    )
     result = run("get_diff", {"from_ref": "HEAD~1", "to_ref": "HEAD"})
     assert "-Hello world." in result
     assert "+Goodbye." in result
@@ -294,7 +300,10 @@ def test_get_diff_after_edit(bare_repo):
 
 def test_get_diff_stat_mode(bare_repo):
     """stat mode returns compact per-file change counts, no patch body."""
-    run("edit_file", {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."})
+    run(
+        "edit_file",
+        {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."},
+    )
     result = run("get_diff", {"from_ref": "HEAD~1", "to_ref": "HEAD", "mode": "stat"})
     assert "Diff (stat):" in result
     assert "main.tex" in result
@@ -307,7 +316,10 @@ def test_get_diff_stat_mode(bare_repo):
 
 def test_get_diff_name_only_mode(bare_repo):
     """name-only mode returns just the list of changed paths."""
-    run("edit_file", {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."})
+    run(
+        "edit_file",
+        {"file_path": "main.tex", "old_string": "Hello world.", "new_string": "Goodbye."},
+    )
     result = run("get_diff", {"from_ref": "HEAD~1", "to_ref": "HEAD", "mode": "name-only"})
     assert "Changed files:" in result
     assert "main.tex" in result

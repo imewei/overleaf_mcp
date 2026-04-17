@@ -4,6 +4,7 @@ This is the data layer of the server: pure models + file-or-env loading,
 with mtime-based caching so repeated tool calls don't re-parse an unchanged
 config file. No Git, no network, no async — just pydantic.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -25,6 +26,7 @@ TEMP_DIR = os.environ.get("OVERLEAF_TEMP_DIR", "./overleaf_cache")
 
 class ProjectConfig(BaseModel):
     """A single Overleaf project entry (name + id + auth token)."""
+
     name: str
     project_id: str
     git_token: str
@@ -32,6 +34,7 @@ class ProjectConfig(BaseModel):
 
 class Config(BaseModel):
     """Top-level server configuration loaded from overleaf_config.json."""
+
     projects: dict[str, ProjectConfig]
     default_project: str | None = None
 
@@ -138,9 +141,7 @@ def resolve_project(
     """
     if git_token or project_id:
         if not (git_token and project_id):
-            raise ValueError(
-                "Inline credentials require both 'git_token' and 'project_id'"
-            )
+            raise ValueError("Inline credentials require both 'git_token' and 'project_id'")
         # Tag the name with a token-hash prefix so two different tenants
         # passing the same project_id via inline creds are distinguishable
         # in log lines and error messages. The hash never leaks the token

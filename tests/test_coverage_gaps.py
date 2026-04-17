@@ -7,6 +7,7 @@ not exercised by the existing dispatcher integration tests.
 Organized by source module. Each test names the specific line range it
 targets so future maintainers can keep the coupling visible.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -201,9 +202,7 @@ def test_ensure_repo_logs_shallow_depth_on_cold_clone(
 
     log_msgs = [r.message for r in caplog.records]
     shallow_logs = [m for m in log_msgs if "shallow depth=3" in m]
-    assert shallow_logs, (
-        f"Expected shallow-depth log line, got: {log_msgs}"
-    )
+    assert shallow_logs, f"Expected shallow-depth log line, got: {log_msgs}"
 
 
 # ---------------------------------------------------------------------------
@@ -258,15 +257,11 @@ def test_list_history_returns_no_commits_message_for_empty_repo(
     fake_repo.config_reader.return_value.get_value.return_value = "stamped"
 
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
-        result = asyncio.run(
-            list_history(git_token="tok", project_id="p1")
-        )
+        result = asyncio.run(list_history(git_token="tok", project_id="p1"))
     assert "No commits found" in result
 
 
-def test_list_history_threads_all_filter_kwargs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_list_history_threads_all_filter_kwargs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """file_path, since, and until must all reach iter_commits as kwargs."""
     monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / "p1").mkdir()
@@ -305,9 +300,7 @@ def test_get_diff_rejects_unknown_mode_inline():
     assert "'banana'" in result
 
 
-def test_get_diff_threads_path_filters(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_get_diff_threads_path_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Both file_path and paths get appended after a -- separator."""
     monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / "p1").mkdir()
@@ -330,7 +323,7 @@ def test_get_diff_threads_path_filters(
     # The -- separator and both filter kinds must all be present
     assert "--" in args
     sep_idx = args.index("--")
-    after_sep = args[sep_idx + 1:]
+    after_sep = args[sep_idx + 1 :]
     assert "main.tex" in after_sep
     assert "chapter1.tex" in after_sep
     assert "chapter2.tex" in after_sep
@@ -344,22 +337,16 @@ def test_get_diff_returns_error_on_git_command_failure(
     (tmp_path / "p1").mkdir()
 
     fake_repo = MagicMock()
-    fake_repo.git.diff.side_effect = GitCommandError(
-        "diff", 128, b"", b"unknown revision 'badref'"
-    )
+    fake_repo.git.diff.side_effect = GitCommandError("diff", 128, b"", b"unknown revision 'badref'")
     fake_repo.config_reader.return_value.get_value.return_value = "stamped"
 
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
-        result = asyncio.run(
-            get_diff(from_ref="badref", git_token="tok", project_id="p1")
-        )
+        result = asyncio.run(get_diff(from_ref="badref", git_token="tok", project_id="p1"))
     assert "Error getting diff" in result
     assert "unknown revision" in result
 
 
-def test_get_diff_truncates_oversized_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_get_diff_truncates_oversized_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A diff larger than max_output_chars is truncated with a marker."""
     monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     (tmp_path / "p1").mkdir()
@@ -453,9 +440,7 @@ def test_get_sections_returns_error_for_missing_file(
 
     fake_repo = _setup_repo_with_files(tmp_path, monkeypatch)
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
-        result = asyncio.run(
-            get_sections(file_path="missing.tex", git_token="t", project_id="p1")
-        )
+        result = asyncio.run(get_sections(file_path="missing.tex", git_token="t", project_id="p1"))
     assert "Error" in result and "missing.tex" in result
 
 
@@ -500,9 +485,7 @@ def test_status_summary_handles_no_commits_and_detached_head(
     )
 
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
-        result = asyncio.run(
-            status_summary(git_token="t", project_id="p1")
-        )
+        result = asyncio.run(status_summary(git_token="t", project_id="p1"))
 
     assert "(no commits)" in result
     assert "(detached HEAD)" in result
@@ -516,7 +499,9 @@ def test_status_summary_no_main_tex_when_no_documentclass(
 
     # A .tex file that's clearly not a main document
     fake_repo = _setup_repo_with_files(
-        tmp_path, monkeypatch, **{"snippet.tex": "Just a fragment\n\\section{X}\n"},
+        tmp_path,
+        monkeypatch,
+        **{"snippet.tex": "Just a fragment\n\\section{X}\n"},
     )
     fake_repo.head.commit.hexsha = "deadbeef" * 5
     fake_repo.head.commit.committed_datetime.strftime.return_value = "2026-04-16 10:00"
@@ -530,15 +515,14 @@ def test_status_summary_no_main_tex_when_no_documentclass(
     assert "no main .tex file detected" in result
 
 
-def test_status_summary_main_tex_with_no_sections(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_status_summary_main_tex_with_no_sections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Main document found but contains no sections → '(no sections found)' (line 606)."""
     from overleaf_mcp.tools import status_summary
 
     # A main document with no \section commands
     fake_repo = _setup_repo_with_files(
-        tmp_path, monkeypatch,
+        tmp_path,
+        monkeypatch,
         **{"main.tex": r"\documentclass{article}\begin{document}body only\end{document}"},
     )
     fake_repo.head.commit.hexsha = "deadbeef" * 5
@@ -561,9 +545,7 @@ def test_status_summary_main_tex_with_no_sections(
 # ---------------------------------------------------------------------------
 
 
-def test_edit_file_returns_error_for_missing_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_edit_file_returns_error_for_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """edit_file on a non-existent path → error message (line 642)."""
     from overleaf_mcp.tools import edit_file
 
@@ -581,9 +563,7 @@ def test_edit_file_returns_error_for_missing_file(
     assert "Error" in result and "ghost.tex" in result
 
 
-def test_rewrite_file_dry_run_reports_size_diff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_rewrite_file_dry_run_reports_size_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """dry_run on rewrite_file reports old/new sizes without writing (lines 707-708)."""
     from overleaf_mcp.tools import rewrite_file
 
@@ -608,9 +588,7 @@ def test_rewrite_file_dry_run_reports_size_diff(
     assert (tmp_path / "p1" / "main.tex").read_text() == original
 
 
-def test_rewrite_file_skips_push_when_push_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_rewrite_file_skips_push_when_push_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """push=False commits but doesn't push (line 719->722 false branch)."""
     from overleaf_mcp.tools import rewrite_file
 
@@ -651,24 +629,24 @@ def test_update_section_returns_error_for_missing_file(
     assert "Error" in result
 
 
-def test_update_section_dry_run_reports_size_diff(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_update_section_dry_run_reports_size_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """dry_run on update_section reports body sizes without writing (781-782)."""
     from overleaf_mcp.tools import update_section
 
     original = (
-        r"\documentclass{article}" "\n"
-        r"\begin{document}" "\n"
-        r"\section{Intro}" "\n"
+        r"\documentclass{article}"
+        "\n"
+        r"\begin{document}"
+        "\n"
+        r"\section{Intro}"
+        "\n"
         "Old body text here.\n"
-        r"\section{Methods}" "\n"
+        r"\section{Methods}"
+        "\n"
         "Methods body.\n"
         r"\end{document}"
     )
-    fake_repo = _setup_repo_with_files(
-        tmp_path, monkeypatch, **{"main.tex": original}
-    )
+    fake_repo = _setup_repo_with_files(tmp_path, monkeypatch, **{"main.tex": original})
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
         result = asyncio.run(
             update_section(
@@ -687,9 +665,7 @@ def test_update_section_dry_run_reports_size_diff(
     assert (tmp_path / "p1" / "main.tex").read_text() == original
 
 
-def test_delete_file_dry_run_reports_size(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_delete_file_dry_run_reports_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """dry_run on delete_file reports the file size without unlinking (877-878)."""
     from overleaf_mcp.tools import delete_file
 
@@ -712,9 +688,7 @@ def test_delete_file_dry_run_reports_size(
     assert (tmp_path / "p1" / "old.tex").exists()
 
 
-def test_delete_file_skips_push_when_push_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_delete_file_skips_push_when_push_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """push=False on delete_file: commits but no push (886->889)."""
     from overleaf_mcp.tools import delete_file
 
@@ -734,16 +708,17 @@ def test_delete_file_skips_push_when_push_false(
     assert "Deleted" in result and "and pushed" not in result
 
 
-def test_update_section_skips_push_when_push_false(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_update_section_skips_push_when_push_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """push=False on update_section: commit but no push (802->805)."""
     from overleaf_mcp.tools import update_section
 
     src = (
-        r"\documentclass{article}" "\n"
-        r"\begin{document}" "\n"
-        r"\section{Intro}" "\n"
+        r"\documentclass{article}"
+        "\n"
+        r"\begin{document}"
+        "\n"
+        r"\section{Intro}"
+        "\n"
         "Body.\n"
         r"\end{document}"
     )
@@ -771,9 +746,7 @@ def test_update_section_skips_push_when_push_false(
 # ---------------------------------------------------------------------------
 
 
-def test_sync_project_clones_when_repo_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_sync_project_clones_when_repo_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """sync_project on a never-cloned project goes through the cold-start
     branch (lines 832-833) and reports 'Cloned project'."""
     from overleaf_mcp.tools import sync_project
@@ -806,7 +779,10 @@ def test_sync_project_reports_stale_warning_as_error(
     fake_repo.config_reader.return_value.get_value.return_value = "stamped"
     fake_repo.remotes.origin.url = ""
     fake_repo.remotes.origin.pull.side_effect = GitCommandError(
-        "pull", 128, b"", b"fatal: Authentication failed",
+        "pull",
+        128,
+        b"",
+        b"fatal: Authentication failed",
     )
 
     # sync_project does Repo(repo_path) inline (not via ensure_repo) for the

@@ -11,6 +11,7 @@ pipe plumbing that isn't worth ~8 LOC of transport code. Instead we:
      regressions like "someone added a required arg to run() and main()
      wasn't updated".
 """
+
 from __future__ import annotations
 
 import asyncio

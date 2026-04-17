@@ -12,6 +12,7 @@ Outside of a bundle (running from a dev checkout), ``vendor/`` simply
 won't exist and this script falls through to a plain import — assuming
 the developer has ``pip install -e .``'d the package.
 """
+
 from __future__ import annotations
 
 import sys

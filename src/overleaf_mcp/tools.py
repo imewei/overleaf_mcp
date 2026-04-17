@@ -14,6 +14,7 @@ Why functions-plus-TOOLS-dict rather than decorators here?
   * ``server.py`` stays tiny (pure transport) and can switch frameworks
     by re-registering the same functions with a different decorator.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,18 +67,15 @@ def _decode_msg(msg: str | bytes) -> str:
     """
     return msg if isinstance(msg, str) else msg.decode("utf-8", errors="replace")
 
+
 # --- Common parameter annotations (reused across tools) -------------------
 
 _ProjectName = Annotated[
     str | None,
     Field(description="Project identifier from config (uses default if not specified)"),
 ]
-_GitToken = Annotated[
-    str | None, Field(description="Git token override (bypasses config file)")
-]
-_ProjectId = Annotated[
-    str | None, Field(description="Project ID override (bypasses config file)")
-]
+_GitToken = Annotated[str | None, Field(description="Git token override (bypasses config file)")]
+_ProjectId = Annotated[str | None, Field(description="Project ID override (bypasses config file)")]
 _CommitMessage = Annotated[str | None, Field(description="Git commit message")]
 _DryRun = Annotated[
     bool,
@@ -88,9 +86,7 @@ _DryRun = Annotated[
         )
     ),
 ]
-_Push = Annotated[
-    bool, Field(description="Whether to push after committing (default: true)")
-]
+_Push = Annotated[bool, Field(description="Whether to push after committing (default: true)")]
 
 
 # === CREATE OPERATIONS ===
@@ -101,9 +97,7 @@ async def create_project(
         str,
         Field(description="LaTeX content for the project (raw .tex content or base64-encoded zip)"),
     ],
-    project_name: Annotated[
-        str | None, Field(description="Optional name for the project")
-    ] = None,
+    project_name: Annotated[str | None, Field(description="Optional name for the project")] = None,
     engine: Annotated[
         str,
         Field(description="TeX engine to use (default: pdflatex)"),
@@ -176,8 +170,7 @@ async def create_file(
 
         if target_path.exists():
             return ctx.wrap(
-                f"Error: File '{file_path}' already exists. "
-                f"Use edit_file to modify it."
+                f"Error: File '{file_path}' already exists. Use edit_file to modify it."
             )
 
         if dry_run:
@@ -263,13 +256,10 @@ async def list_files(
         files.sort()
 
         if not files:
-            return ctx.wrap(
-                f"No files found{' with extension ' + extension if extension else ''}"
-            )
+            return ctx.wrap(f"No files found{' with extension ' + extension if extension else ''}")
 
         return ctx.wrap(
-            f"Files in project '{project.name}':\n"
-            + "\n".join(f"  - {f}" for f in files)
+            f"Files in project '{project.name}':\n" + "\n".join(f"  - {f}" for f in files)
         )
 
 
@@ -361,9 +351,7 @@ async def get_sections(
 
 async def get_section_content(
     file_path: Annotated[str, Field(description="Path to the LaTeX file")],
-    section_title: Annotated[
-        str, Field(description="Title of the section to retrieve")
-    ],
+    section_title: Annotated[str, Field(description="Title of the section to retrieve")],
     project_name: _ProjectName = None,
     git_token: _GitToken = None,
     project_id: _ProjectId = None,
@@ -384,14 +372,9 @@ async def get_section_content(
         if section_content is None:
             sections = parse_sections(content)
             available = ", ".join(f"'{s['title']}'" for s in sections)
-            return ctx.wrap(
-                f"Section '{section_title}' not found. "
-                f"Available sections: {available}"
-            )
+            return ctx.wrap(f"Section '{section_title}' not found. Available sections: {available}")
 
-        return ctx.wrap(
-            f"Content of section '{section_title}':\n\n{section_content}"
-        )
+        return ctx.wrap(f"Content of section '{section_title}':\n\n{section_content}")
 
 
 async def list_history(
@@ -399,9 +382,7 @@ async def list_history(
         int,
         Field(description="Maximum number of commits to show (default: 20, max: 200)"),
     ] = 20,
-    file_path: Annotated[
-        str | None, Field(description="Filter history to a specific file")
-    ] = None,
+    file_path: Annotated[str | None, Field(description="Filter history to a specific file")] = None,
     since: Annotated[
         str | None,
         Field(description="Show commits after this date (e.g., '2025-01-01', '2.weeks')"),
@@ -428,9 +409,7 @@ async def list_history(
 
     async with acquire_project(project, force_pull=False) as ctx:
         # iter_commits walks the object db via subprocess — off the loop.
-        commits = await _run_blocking(
-            lambda: list(ctx.repo.iter_commits(**kwargs))
-        )
+        commits = await _run_blocking(lambda: list(ctx.repo.iter_commits(**kwargs)))
 
         if not commits:
             return ctx.wrap("No commits found")
@@ -469,12 +448,8 @@ async def get_diff(
     to_ref: Annotated[
         str | None, Field(description="Ending reference (default: working tree)")
     ] = None,
-    file_path: Annotated[
-        str | None, Field(description="Filter diff to a specific file")
-    ] = None,
-    paths: Annotated[
-        list[str] | None, Field(description="Filter diff to multiple files")
-    ] = None,
+    file_path: Annotated[str | None, Field(description="Filter diff to a specific file")] = None,
+    paths: Annotated[list[str] | None, Field(description="Filter diff to multiple files")] = None,
     mode: Annotated[
         str,
         Field(
@@ -489,7 +464,9 @@ async def get_diff(
     ] = "unified",
     context_lines: Annotated[
         int,
-        Field(description="Number of context lines in unified diff (0-10, default: 3). Ignored for stat/name-only."),
+        Field(
+            description="Number of context lines in unified diff (0-10, default: 3). Ignored for stat/name-only."
+        ),
     ] = 3,
     max_output_chars: Annotated[
         int,
@@ -507,10 +484,7 @@ async def get_diff(
     - ``name-only``: just the list of changed paths.
     """
     if mode not in {"unified", "stat", "name-only"}:
-        return (
-            f"Error: unknown diff mode '{mode}'. "
-            "Valid modes: 'unified', 'stat', 'name-only'."
-        )
+        return f"Error: unknown diff mode '{mode}'. Valid modes: 'unified', 'stat', 'name-only'."
 
     project = resolve_project(project_name, git_token, project_id)
     context_lines = max(0, min(10, context_lines))
@@ -648,9 +622,7 @@ async def status_summary(
 
 async def edit_file(
     file_path: Annotated[str, Field(description="Path to the file to edit")],
-    old_string: Annotated[
-        str, Field(description="The exact text to find and replace")
-    ],
+    old_string: Annotated[str, Field(description="The exact text to find and replace")],
     new_string: Annotated[str, Field(description="The text to replace it with")],
     commit_message: _CommitMessage = None,
     project_name: _ProjectName = None,
@@ -679,8 +651,7 @@ async def edit_file(
         if old_string not in content:
             preview = content[:500] + "..." if len(content) > 500 else content
             return ctx.wrap(
-                f"Error: old_string not found in '{file_path}'. "
-                f"File preview:\n{preview}"
+                f"Error: old_string not found in '{file_path}'. File preview:\n{preview}"
             )
 
         count = content.count(old_string)
@@ -731,10 +702,7 @@ async def rewrite_file(
         target_path = validate_path(repo_path, file_path)
 
         if not target_path.exists():
-            return ctx.wrap(
-                f"Error: File '{file_path}' not found. "
-                f"Use create_file to create it."
-            )
+            return ctx.wrap(f"Error: File '{file_path}' not found. Use create_file to create it.")
 
         if dry_run:
             existing_size = target_path.stat().st_size
@@ -757,9 +725,7 @@ async def rewrite_file(
 
 async def update_section(
     file_path: Annotated[str, Field(description="Path to the LaTeX file")],
-    section_title: Annotated[
-        str, Field(description="Title of the section to update")
-    ],
+    section_title: Annotated[str, Field(description="Title of the section to update")],
     new_content: Annotated[
         str,
         Field(description="New content for the section (excluding the section header)"),
@@ -796,19 +762,14 @@ async def update_section(
 
         if section is None:
             available = ", ".join(f"'{s['title']}'" for s in sections)
-            return ctx.wrap(
-                f"Section '{section_title}' not found. "
-                f"Available sections: {available}"
-            )
+            return ctx.wrap(f"Section '{section_title}' not found. Available sections: {available}")
 
         header_match = re.search(
             rf"\\{section['type']}\*?\{{{re.escape(section['title'])}\}}",
             content,
         )
         if not header_match:
-            return ctx.wrap(
-                f"Could not locate section header for '{section_title}'"
-            )
+            return ctx.wrap(f"Could not locate section header for '{section_title}'")
 
         if dry_run:
             old_len = section["end_pos"] - header_match.end()
@@ -821,11 +782,7 @@ async def update_section(
 
         header_end = header_match.end()
         new_file_content = (
-            content[:header_end]
-            + "\n"
-            + new_content.strip()
-            + "\n"
-            + content[section["end_pos"]:]
+            content[:header_end] + "\n" + new_content.strip() + "\n" + content[section["end_pos"] :]
         )
 
         target_path.write_text(new_file_content)
@@ -835,9 +792,7 @@ async def update_section(
         if push:
             await _run_blocking(ctx.repo.remotes.origin.push)
 
-        return ctx.wrap(
-            f"Updated section '{section_title}'{' and pushed' if push else ''}"
-        )
+        return ctx.wrap(f"Updated section '{section_title}'{' and pushed' if push else ''}")
 
 
 async def sync_project(
@@ -883,10 +838,7 @@ async def sync_project(
         # is_dirty() is safe here because we hold the lock — no other tool
         # can be mid-commit against this working tree.
         if Repo(repo_path).is_dirty():
-            return (
-                "Warning: Local changes exist. "
-                "Commit or discard them before syncing."
-            )
+            return "Warning: Local changes exist. Commit or discard them before syncing."
 
     # Refresh path: up to two attempts. Each attempt runs under the writer
     # lock; between attempts the lock is released so the backoff sleep
@@ -898,9 +850,7 @@ async def sync_project(
         advised. StaleRepoWarning / GitCommandError propagate out."""
         async with rwlock.exclusive():
             try:
-                await _run_blocking(
-                    ensure_repo, project, force_pull=True, _retry_sync=False
-                )
+                await _run_blocking(ensure_repo, project, force_pull=True, _retry_sync=False)
                 return True, None
             except _TransientPullError as te:
                 return False, _redact_url(str(te).strip())
@@ -915,11 +865,13 @@ async def sync_project(
         return f"Synced project '{project.name}' with Overleaf"
 
     # Transient failure on first attempt — backoff outside the lock.
-    # nosec B311 -- jitter for retry backoff, not a security primitive.
+    # Bandit B311 rationale: jitter for retry backoff, not a security primitive.
     delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
     logger.info(
         "pull failed transiently for %s (retry in %.2fs): %s",
-        project.project_id, delay, transient_msg,
+        project.project_id,
+        delay,
+        transient_msg,
     )
     await asyncio.sleep(delay)
 
@@ -962,8 +914,7 @@ async def delete_file(
         if dry_run:
             size = target_path.stat().st_size
             return ctx.wrap(
-                f"Dry run: would delete '{file_path}' ({size} bytes)\n"
-                f"No changes were written."
+                f"Dry run: would delete '{file_path}' ({size} bytes)\nNo changes were written."
             )
 
         ctx.repo.index.remove([file_path])

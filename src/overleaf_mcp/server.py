@@ -19,6 +19,7 @@ All business logic lives in:
 Framework swap (raw MCP SDK → FastMCP) removed ~500 LOC of hand-written
 JSON schema boilerplate. All schemas are now derived from type hints.
 """
+
 from __future__ import annotations
 
 from fastmcp import FastMCP

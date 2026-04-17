@@ -11,6 +11,7 @@ Covers:
 No real network or git remote is touched. Git interactions are replaced
 with in-memory mocks so tests run in milliseconds on any host.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -125,6 +126,7 @@ def test_load_config_reparses_on_mtime_change(tmp_config_file: Path):
     _write_config(tmp_config_file)
     # Force a distinct mtime (avoid filesystems with 1s resolution ambiguity)
     import os as _os
+
     stat = tmp_config_file.stat()
     _os.utime(tmp_config_file, (stat.st_atime, stat.st_mtime + 1.0))
 
@@ -225,9 +227,7 @@ def test_ensure_repo_raises_stale_on_pull_failure(
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
-    fake_repo.remotes.origin.pull.side_effect = GitCommandError(
-        "pull", 1, b"", b"boom"
-    )
+    fake_repo.remotes.origin.pull.side_effect = GitCommandError("pull", 1, b"", b"boom")
     with (
         patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
         pytest.raises(StaleRepoWarning, match="boom"),
@@ -275,8 +275,10 @@ def test_acquire_project_falls_back_on_stale(
         raise StaleRepoWarning("network unreachable")
 
     async def _run():
-        with patch("overleaf_mcp.git_ops.ensure_repo", side_effect=_raise_stale), \
-             patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
+        with (
+            patch("overleaf_mcp.git_ops.ensure_repo", side_effect=_raise_stale),
+            patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        ):
             async with acquire_project(fake_project) as ctx:
                 assert ctx.repo is fake_repo
                 assert len(ctx.warnings) == 1
@@ -310,7 +312,9 @@ def test_acquire_project_falls_back_on_auth_failure(
     # by test_pull_does_not_retry_on_permanent_failure for the no-retry
     # invariant; this test covers the user-facing behavior end-to-end).
     fake_repo.remotes.origin.pull.side_effect = GitCommandError(
-        "pull", 128, b"",
+        "pull",
+        128,
+        b"",
         b"fatal: Authentication failed for 'https://git.overleaf.com/abc123/'",
     )
 
@@ -392,6 +396,7 @@ def test_toolcontext_wrap_envelope_ok_true_on_success(monkeypatch: pytest.Monkey
     # Parse the envelope to verify its contents
     import re as _re
     import json as _json
+
     match = _re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result)
     assert match is not None
     envelope = _json.loads(match.group(1))
@@ -405,9 +410,8 @@ def test_toolcontext_wrap_envelope_ok_false_with_warnings(monkeypatch: pytest.Mo
     result = ctx.wrap("Content of 'main.tex'")
     import re as _re
     import json as _json
-    envelope = _json.loads(
-        _re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result).group(1)
-    )
+
+    envelope = _json.loads(_re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result).group(1))
     assert envelope["ok"] is False
     assert envelope["warnings"] == ["⚠ could not refresh: boom"]
 
@@ -419,9 +423,8 @@ def test_toolcontext_wrap_envelope_ok_false_on_error_prefix(monkeypatch: pytest.
     result = ctx.wrap("Error: File 'x.tex' not found")
     import re as _re
     import json as _json
-    envelope = _json.loads(
-        _re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result).group(1)
-    )
+
+    envelope = _json.loads(_re.search(r"<mcp-envelope>(.*?)</mcp-envelope>", result).group(1))
     assert envelope["ok"] is False
 
 
@@ -569,8 +572,7 @@ def test_acquire_project_allows_concurrent_readers(
         with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
             await asyncio.gather(reader("a"), reader("b"), reader("c"))
         assert max_concurrent >= 2, (
-            f"Readers serialized (max={max_concurrent}); RW lock did not "
-            "loosen the read path"
+            f"Readers serialized (max={max_concurrent}); RW lock did not loosen the read path"
         )
 
     asyncio.run(_run())
@@ -674,14 +676,11 @@ def test_pull_cache_separates_clients_with_different_tokens(
 
     # Critical invariant: B is not piggybacking on A's freshness flag.
     assert fake_repo.remotes.origin.pull.call_count == 2, (
-        "Client B's pull was suppressed by client A's TTL entry — "
-        "_LAST_PULL key is too coarse"
+        "Client B's pull was suppressed by client A's TTL entry — _LAST_PULL key is too coarse"
     )
 
 
-def test_pull_cache_same_token_still_dedupes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-):
+def test_pull_cache_same_token_still_dedupes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Same project + same token → second call hits cache (v1 invariant)."""
     monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("OVERLEAF_PULL_TTL", "60")
@@ -789,10 +788,8 @@ def test_timing_log_emitted_when_env_set(
     # Stable JSON format documented in docs/API.md — parse the payload
     # rather than substring-matching, so future key additions don't trip
     # the assertion.
-    assert line.startswith("acquire_project "), (
-        f"timing line missing stable prefix: {line!r}"
-    )
-    payload = json.loads(line[len("acquire_project "):])
+    assert line.startswith("acquire_project "), f"timing line missing stable prefix: {line!r}"
+    payload = json.loads(line[len("acquire_project ") :])
     assert payload["project"] == "p123"
     assert payload["mode"] == "read"
     assert isinstance(payload["elapsed_ms"], (int, float))
@@ -823,9 +820,7 @@ def test_timing_log_silent_when_env_unset(
     asyncio.run(_run())
 
     timing_lines = [r.message for r in caplog.records if "acquire_project " in r.message]
-    assert not timing_lines, (
-        f"Timing line leaked without OVERLEAF_TIMING=1: {timing_lines}"
-    )
+    assert not timing_lines, f"Timing line leaked without OVERLEAF_TIMING=1: {timing_lines}"
 
 
 def test_timing_log_marks_stale_on_fallback(
@@ -859,7 +854,7 @@ def test_timing_log_marks_stale_on_fallback(
 
     timing_lines = [r.message for r in caplog.records if "acquire_project " in r.message]
     assert timing_lines, "No timing line emitted on stale path"
-    payload = json.loads(timing_lines[-1][len("acquire_project "):])
+    payload = json.loads(timing_lines[-1][len("acquire_project ") :])
     assert payload["stale"] is True
 
 
@@ -879,7 +874,9 @@ def test_pull_retries_once_on_transient_failure(
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
-    transient = GitCommandError("pull", 1, b"", b"early EOF\nfatal: the remote end hung up unexpectedly")
+    transient = GitCommandError(
+        "pull", 1, b"", b"early EOF\nfatal: the remote end hung up unexpectedly"
+    )
     fake_repo.remotes.origin.pull.side_effect = [transient, None]
 
     with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
@@ -925,7 +922,9 @@ def test_pull_does_not_retry_on_permanent_failure(
     fake_repo = _make_fake_repo()
     # The exact text Overleaf returns on a bad token
     permanent = GitCommandError(
-        "pull", 128, b"",
+        "pull",
+        128,
+        b"",
         b"fatal: Authentication failed for 'https://git.overleaf.com/...'",
     )
     fake_repo.remotes.origin.pull.side_effect = permanent
@@ -950,16 +949,12 @@ def test_is_transient_classification():
     assert git_ops._is_transient_pull_error("HTTP 503")
     assert git_ops._is_transient_pull_error("operation timed out")
     assert git_ops._is_transient_pull_error("broken pipe")
-    assert git_ops._is_transient_pull_error(
-        "fatal: the remote end hung up unexpectedly"
-    )
+    assert git_ops._is_transient_pull_error("fatal: the remote end hung up unexpectedly")
 
     # Permanent patterns → False (must NOT be retried)
     assert not git_ops._is_transient_pull_error("Authentication failed")
     assert not git_ops._is_transient_pull_error("could not read Username")
-    assert not git_ops._is_transient_pull_error(
-        "fatal: couldn't find remote ref refs/heads/main"
-    )
+    assert not git_ops._is_transient_pull_error("fatal: couldn't find remote ref refs/heads/main")
     assert not git_ops._is_transient_pull_error("Permission denied")
     assert not git_ops._is_transient_pull_error("invalid credentials")
 
@@ -985,9 +980,7 @@ def test_read_file_schema_has_max_bytes():
     )
 
 
-def test_read_file_truncates_oversized_content(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+def test_read_file_truncates_oversized_content(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A file larger than max_bytes MUST be truncated with a visible marker."""
     from overleaf_mcp.tools import read_file as read_file_tool
 
@@ -1068,8 +1061,7 @@ def test_acquire_project_default_mode_is_read(
         with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
             await asyncio.gather(caller("a"), caller("b"))
         assert max_concurrent == 2, (
-            "Default mode is not read — callers without explicit mode= "
-            "are still being serialized"
+            "Default mode is not read — callers without explicit mode= are still being serialized"
         )
 
     asyncio.run(_run())
@@ -1349,9 +1341,7 @@ def test_transient_retry_releases_lock_during_backoff(
         # block the full remaining ~0.25s and hit the timeout.
         await asyncio.sleep(0.05)
         try:
-            await asyncio.wait_for(
-                _take_reader_briefly(fake_project), timeout=0.2
-            )
+            await asyncio.wait_for(_take_reader_briefly(fake_project), timeout=0.2)
             reader_entered_during_backoff = True
         except asyncio.TimeoutError:
             pass
@@ -1427,9 +1417,7 @@ def test_sync_project_retry_releases_lock_during_backoff(
                 git_token=fake_project.git_token,
             )
             # sync_project succeeds after the retry — no error prefix
-            assert not result.startswith("Error:"), (
-                f"sync_project returned an error: {result!r}"
-            )
+            assert not result.startswith("Error:"), f"sync_project returned an error: {result!r}"
             assert "Synced" in result
             # The reader's completion event is set iff it acquired shared
             # during the writer's backoff (lock released).
@@ -1538,9 +1526,7 @@ def test_timeout_falls_back_to_stale_snapshot_when_clone_exists(
                 assert ctx.repo is fake_repo, (
                     "TimeoutError fallback did not yield the local snapshot"
                 )
-                assert len(ctx.warnings) == 1, (
-                    f"Expected exactly one warning, got {ctx.warnings!r}"
-                )
+                assert len(ctx.warnings) == 1, f"Expected exactly one warning, got {ctx.warnings!r}"
                 w = ctx.warnings[0]
                 assert "could not refresh" in w
                 assert "timed out" in w
@@ -1596,7 +1582,9 @@ def test_stale_warning_contains_redacted_url_not_token(
     # Git error with the token embedded in the URL — the exact shape of
     # what GitPython surfaces when the pull fails mid-request.
     fake_repo.remotes.origin.pull.side_effect = GitCommandError(
-        "pull", 128, b"",
+        "pull",
+        128,
+        b"",
         b"fatal: Authentication failed for 'https://git:LEAKED_TOKEN@git.overleaf.com/abc/'",
     )
 

@@ -12,6 +12,7 @@ run it after ``mcpb/build-mcpb.sh``; local dev runs skip gracefully when
 no bundle is present. We do NOT build the bundle inside the test because
 ``npx @anthropic-ai/mcpb pack`` is slow (~30 s cold start).
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -36,10 +37,7 @@ def _find_bundle() -> Path | None:
 
 @pytest.mark.skipif(
     _find_bundle() is None,
-    reason=(
-        "No MCPB bundle built. Run mcpb/build-mcpb.sh to generate one, "
-        "then re-run this test."
-    ),
+    reason=("No MCPB bundle built. Run mcpb/build-mcpb.sh to generate one, then re-run this test."),
 )
 def test_mcpb_bundle_importlib_metadata_resolves(tmp_path: Path) -> None:
     """Vendored pydantic's ``importlib.metadata.version()`` MUST resolve.

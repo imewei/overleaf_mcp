@@ -4,6 +4,7 @@ Pure-function string utilities for locating ``\\section{...}``-style
 macros and slicing a document into section bodies. No file I/O, no
 dependencies on the rest of the project — safe to reuse standalone.
 """
+
 from __future__ import annotations
 
 import re
@@ -39,13 +40,15 @@ def parse_sections(content: str) -> list[dict[str, Any]]:
         section_content = content[start_pos:end_pos].strip()
         preview = section_content[:200] + "..." if len(section_content) > 200 else section_content
 
-        sections.append({
-            "type": section_type,
-            "title": title,
-            "preview": preview,
-            "start_pos": match.start(),
-            "end_pos": end_pos,
-        })
+        sections.append(
+            {
+                "type": section_type,
+                "title": title,
+                "preview": preview,
+                "start_pos": match.start(),
+                "end_pos": end_pos,
+            }
+        )
 
     return sections
 
@@ -56,6 +59,6 @@ def get_section_by_title(content: str, title: str) -> str | None:
 
     for section in sections:
         if section["title"].lower() == title.lower():
-            return content[section["start_pos"]:section["end_pos"]]
+            return content[section["start_pos"] : section["end_pos"]]
 
     return None

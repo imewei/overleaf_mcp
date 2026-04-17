@@ -113,10 +113,12 @@ def test_tools_list_byte_budget():
     from overleaf_mcp.tools import list_tools
 
     tools = asyncio.run(list_tools())
-    payload = json.dumps([
-        {"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
-        for t in tools
-    ])
+    payload = json.dumps(
+        [
+            {"name": t.name, "description": t.description, "inputSchema": t.inputSchema}
+            for t in tools
+        ]
+    )
     assert len(payload) <= 16384, (
         f"tools/list JSON has grown to {len(payload)} bytes — over the "
         f"16384-byte budget. Tighten descriptions or split the tool surface."
