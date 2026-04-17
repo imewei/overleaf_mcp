@@ -20,6 +20,7 @@ import base64
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -421,6 +422,23 @@ async def list_history(
 
         if not commits:
             return ctx.wrap("No commits found")
+
+        # Shallow clones (OVERLEAF_SHALLOW_CLONE=1) silently cap history at
+        # the shallow depth. Without this warning, a caller getting fewer
+        # commits than requested has no way to tell whether the project
+        # genuinely only has N commits or whether shallow depth is
+        # truncating them. Attach a warning whenever the repo is shallow
+        # and the result is shorter than the requested limit.
+        try:
+            is_shallow = (Path(ctx.repo.git_dir) / "shallow").exists()
+        except (TypeError, OSError):  # pragma: no cover — mocked-repo paths
+            is_shallow = False
+        if is_shallow and len(commits) < limit:
+            ctx.warnings.append(
+                "⚠ history may be truncated by shallow clone "
+                "(OVERLEAF_SHALLOW_CLONE=1); disable it or raise "
+                "OVERLEAF_SHALLOW_DEPTH to see deeper history"
+            )
 
         lines = [f"Commit history (showing {len(commits)}/{limit}):"]
         for c in commits:
