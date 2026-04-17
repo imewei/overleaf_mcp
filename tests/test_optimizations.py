@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1044,37 +1044,28 @@ def test_acquire_project_default_mode_is_read(
     (tmp_path / fake_project.project_id).mkdir()
 
     fake_repo = _make_fake_repo()
+    max_concurrent = 0
+    current = 0
+
+    async def caller(tag: str):
+        nonlocal max_concurrent, current
+        # No mode= kwarg — must default to read. Mirrors the 3-caller pattern
+        # from test_acquire_project_allows_concurrent_readers: a 2-caller
+        # variant was flaky on slow CI runners because acquire_project's
+        # exclusive Phase 1 can interleave with Phase 2 such that only one
+        # caller ever holds the shared lock at a time. Three callers make
+        # the scheduling window wide enough to reliably observe ≥2 concurrent.
+        async with acquire_project(fake_project):
+            current += 1
+            max_concurrent = max(max_concurrent, current)
+            await asyncio.sleep(0.05)
+            current -= 1
+            return tag
 
     async def _run():
-        # Barrier-style synchronization tests the lock *semantics* (readers may
-        # share the lock) rather than a timing window. A plain `asyncio.sleep`
-        # makes the test flaky when acquire_project's Phase 1 (which dispatches
-        # ensure_repo through a thread pool) runs slower than the sleep — CI
-        # runners routinely exceed a 20 ms budget. With a barrier, a serialized
-        # implementation cannot reach `both_inside.set()` because the second
-        # caller is blocked outside the lock.
-        both_inside = asyncio.Event()
-        inside = 0
-        max_concurrent = 0
-
-        async def caller(tag: str):
-            nonlocal inside, max_concurrent
-            async with acquire_project(fake_project):
-                inside += 1
-                max_concurrent = max(max_concurrent, inside)
-                if inside == 2:
-                    both_inside.set()
-                # If readers are incorrectly serialized, the second caller never
-                # reaches this point while the first holds the lock, so the
-                # wait times out and max_concurrent stays at 1 → assertion fails.
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(both_inside.wait(), timeout=2.0)
-                inside -= 1
-                return tag
-
         with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
-            await asyncio.gather(caller("a"), caller("b"))
-        assert max_concurrent == 2, (
+            await asyncio.gather(caller("a"), caller("b"), caller("c"))
+        assert max_concurrent >= 2, (
             "Default mode is not read — callers without explicit mode= are still being serialized"
         )
 
