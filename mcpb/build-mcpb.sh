@@ -42,17 +42,33 @@ cp -r "$REPO_ROOT/src/overleaf_mcp" "$STAGE/server/overleaf_mcp"
 
 # 4) Vendored dependencies. Runtime deps only — dev extras are excluded.
 #
-# Prefer `uv pip install --target` (works even when pip isn't in the venv,
-# common for uv-managed environments). Fall back to `python -m pip` for
-# systems without uv.
+# Reproducibility: when uv is available, the bundle is resolved against
+# the committed uv.lock via `uv export --frozen`. This guarantees that
+# two builds on different machines at different times vendor the SAME
+# exact dependency versions — the lockfile is the source of truth.
+# Without this, `>=` specifiers would pick up whatever the latest
+# compatible versions are at build time, producing bundles that differ
+# per-machine and drift silently when upstream releases happen.
+#
+# Fallback without uv uses `>=` specifiers — bundle is NOT guaranteed
+# reproducible; a visible warning is emitted.
 echo ">> Vendoring runtime deps into server/vendor/"
-VENDOR_DEPS=(
-    "mcp>=1.0.0" "fastmcp>=3.0.0" "gitpython>=3.1.40" "pydantic>=2.0.0"
-)
 if command -v uv >/dev/null 2>&1; then
-    uv pip install --target "$STAGE/server/vendor" --no-compile "${VENDOR_DEPS[@]}"
+    REQ_FILE="$STAGE/requirements.txt"
+    echo ">>   resolving pinned versions via uv export --frozen"
+    uv export --frozen --no-dev --no-hashes --format requirements-txt \
+        > "$REQ_FILE"
+    uv pip install --target "$STAGE/server/vendor" --no-compile \
+        -r "$REQ_FILE"
+    rm -f "$REQ_FILE"
 else
-    python3 -m pip install --target "$STAGE/server/vendor" --no-compile "${VENDOR_DEPS[@]}"
+    echo ">>   WARNING: uv not found — installing with range specs." >&2
+    echo ">>   bundle will NOT be reproducible across builds." >&2
+    VENDOR_DEPS=(
+        "mcp>=1.0.0" "fastmcp>=3.0.0" "gitpython>=3.1.40" "pydantic>=2.0.0"
+    )
+    python3 -m pip install --target "$STAGE/server/vendor" --no-compile \
+        "${VENDOR_DEPS[@]}"
 fi
 
 # Strip items that are safe to remove — never imported at runtime.
