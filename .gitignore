@@ -53,6 +53,7 @@ uv.lock
 
 # Claude Code session artifacts (not part of the project)
 .claude-progress.md
+.remember/
 
 # MCPB build artifacts (produced by mcpb/build-mcpb.sh)
 build/
