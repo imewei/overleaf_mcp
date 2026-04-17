@@ -16,8 +16,10 @@ Why functions-plus-TOOLS-dict rather than decorators here?
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import random
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -31,7 +33,10 @@ from .config import load_config, resolve_project
 from .git_ops import (
     StaleRepoWarning,
     _lock_for,
+    _redact_url,
+    _RETRY_DELAY_RANGE,
     _run_blocking,
+    _TransientPullError,
     acquire_project,
     ensure_repo,
     get_repo_path,
@@ -539,7 +544,10 @@ async def get_diff(
         try:
             diff = await _run_blocking(ctx.repo.git.diff, *diff_args)
         except GitCommandError as e:
-            return ctx.wrap(f"Error getting diff: {e}")
+            # Redact defensively — git's stderr rarely echoes the remote URL
+            # on a diff, but any path that surfaces GitCommandError.stderr
+            # to a tool response must go through _redact_url.
+            return ctx.wrap(f"Error getting diff: {_redact_url(str(e))}")
 
         if not diff:
             return ctx.wrap("No differences found")
@@ -847,32 +855,85 @@ async def sync_project(
     # directly: that helper swallows StaleRepoWarning and returns a
     # degraded ToolContext, whereas this tool's contract is to report
     # the refresh error to the caller. Instead we hold the per-project
-    # lock manually (same serialization guarantee) and let the error
+    # lock manually (same serialization guarantee) and let errors
     # propagate out of ensure_repo.
+    #
+    # Retry orchestration mirrors ``acquire_project``: ``_retry_sync=False``
+    # so the transient-retry backoff runs as an ``asyncio.sleep`` with
+    # the writer lock released, not as a ``time.sleep`` in the worker
+    # thread. Concurrent tools against the same project are free to run
+    # during the 0.5–1.5 s backoff window.
     project = resolve_project(project_name, git_token, project_id)
     repo_path = get_repo_path(project.project_id)
+    rwlock = _lock_for(project.project_id)
 
-    async with _lock_for(project.project_id).exclusive():
+    # Pre-flight: cold-clone shortcut + dirty-check, under exclusive.
+    async with rwlock.exclusive():
         if not repo_path.exists():
-            await _run_blocking(ensure_repo, project, force_pull=True)
-            return f"Cloned project '{project.name}'"
+            # Cold clone has no transient/retry semantics — clone_from either
+            # succeeds or raises GitCommandError. Keep it inside the lock.
+            try:
+                await _run_blocking(ensure_repo, project, force_pull=True)
+                return f"Cloned project '{project.name}'"
+            except StaleRepoWarning as w:
+                return f"Error syncing: {_redact_url(str(w))}"
+            except GitCommandError as e:
+                return f"Error syncing: {_redact_url(str(e))}"
 
-        # is_dirty() is safe to call here because we hold the lock — no
-        # other tool can be mid-commit against this working tree.
-        repo = Repo(repo_path)
-        if repo.is_dirty():
+        # is_dirty() is safe here because we hold the lock — no other tool
+        # can be mid-commit against this working tree.
+        if Repo(repo_path).is_dirty():
             return (
                 "Warning: Local changes exist. "
                 "Commit or discard them before syncing."
             )
 
-        try:
-            await _run_blocking(ensure_repo, project, force_pull=True)
-            return f"Synced project '{project.name}' with Overleaf"
-        except StaleRepoWarning as w:
-            return f"Error syncing: {w}"
-        except GitCommandError as e:
-            return f"Error syncing: {e}"
+    # Refresh path: up to two attempts. Each attempt runs under the writer
+    # lock; between attempts the lock is released so the backoff sleep
+    # doesn't block concurrent tools.
+    async def _attempt() -> tuple[bool, str | None]:
+        """Single refresh attempt under exclusive. Returns
+        ``(success, transient_msg)``. ``success=True`` → refresh
+        completed. ``transient_msg`` non-None → transient failure, retry
+        advised. StaleRepoWarning / GitCommandError propagate out."""
+        async with rwlock.exclusive():
+            try:
+                await _run_blocking(
+                    ensure_repo, project, force_pull=True, _retry_sync=False
+                )
+                return True, None
+            except _TransientPullError as te:
+                return False, _redact_url(str(te).strip())
+
+    try:
+        ok, transient_msg = await _attempt()
+    except StaleRepoWarning as w:
+        return f"Error syncing: {_redact_url(str(w))}"
+    except GitCommandError as e:
+        return f"Error syncing: {_redact_url(str(e))}"
+    if ok:
+        return f"Synced project '{project.name}' with Overleaf"
+
+    # Transient failure on first attempt — backoff outside the lock.
+    # nosec B311 -- jitter for retry backoff, not a security primitive.
+    delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
+    logger.info(
+        "pull failed transiently for %s (retry in %.2fs): %s",
+        project.project_id, delay, transient_msg,
+    )
+    await asyncio.sleep(delay)
+
+    try:
+        ok, transient_msg2 = await _attempt()
+    except StaleRepoWarning as w:
+        return f"Error syncing: {_redact_url(str(w))}"
+    except GitCommandError as e:
+        return f"Error syncing: {_redact_url(str(e))}"
+    if ok:
+        return f"Synced project '{project.name}' with Overleaf"
+    # Both attempts transient — report the last failure. sync_project's
+    # contract is hard-fail on refresh errors (no stale fallback).
+    return f"Error syncing: {transient_msg2}"
 
 
 # === DELETE OPERATIONS ===

@@ -256,4 +256,28 @@ exists) attach a `⚠ could not refresh from Overleaf: ...` warning line
 to the tool's body. Hard errors (misconfigured project, bad path, bad
 auth on a write) return `Error:` prefixes.
 
+All error text that surfaces a Git remote URL has its embedded
+`user:password@` userinfo replaced with `<redacted>@` before it reaches
+logs or tool output — the Basic-auth token never leaks through
+`GitCommandError.stderr`.
+
+## Observability
+
+Setting `OVERLEAF_TIMING=1` emits one INFO-level log line per tool call
+from the `overleaf_mcp.git_ops` logger, formatted as:
+
+```
+acquire_project {"project":"<id>","mode":"read|write","elapsed_ms":42.3,"stale":false}
+```
+
+Stability: the `acquire_project ` prefix and the four JSON keys
+(`project`, `mode`, `elapsed_ms`, `stale`) are a **stable interface** —
+external monitoring pipelines may parse this line directly. Additional
+keys may be added in future versions (e.g. `tool` under the HTTP
+transport) but existing keys will not be renamed or removed without a
+major version bump.
+
+The line is silent when `OVERLEAF_TIMING` is unset — zero cost when off
+(one env-var lookup per tool call).
+
 See `docs/ARCHITECTURE.md` §3 for the full soft-vs-hard taxonomy.

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -267,7 +268,10 @@ def test_acquire_project_falls_back_on_stale(
 
     fake_repo = _make_fake_repo()
 
-    def _raise_stale(_project, *, force_pull=False):
+    # acquire_project calls ensure_repo(..., _retry_sync=False); accept the
+    # private kwarg silently so the mock signature doesn't drift from the
+    # real function's.
+    def _raise_stale(_project, *, force_pull=False, **_kwargs):
         raise StaleRepoWarning("network unreachable")
 
     async def _run():
@@ -782,11 +786,17 @@ def test_timing_log_emitted_when_env_set(
     timing_lines = [r.message for r in caplog.records if "acquire_project" in r.message]
     assert timing_lines, "No timing log line emitted with OVERLEAF_TIMING=1"
     line = timing_lines[-1]
-    # Structured fields — agents grep these
-    assert "project=p123" in line
-    assert "mode=read" in line
-    assert "elapsed_ms=" in line
-    assert "stale=false" in line  # happy path → not stale
+    # Stable JSON format documented in docs/API.md — parse the payload
+    # rather than substring-matching, so future key additions don't trip
+    # the assertion.
+    assert line.startswith("acquire_project "), (
+        f"timing line missing stable prefix: {line!r}"
+    )
+    payload = json.loads(line[len("acquire_project "):])
+    assert payload["project"] == "p123"
+    assert payload["mode"] == "read"
+    assert isinstance(payload["elapsed_ms"], (int, float))
+    assert payload["stale"] is False  # happy path → not stale
 
 
 def test_timing_log_silent_when_env_unset(
@@ -834,7 +844,7 @@ def test_timing_log_marks_stale_on_fallback(
     fake_repo = _make_fake_repo()
     caplog.set_level(logging.INFO, logger="overleaf_mcp.git_ops")
 
-    def _raise_stale(_project, *, force_pull=False):
+    def _raise_stale(_project, *, force_pull=False, **_kwargs):
         raise StaleRepoWarning("network unreachable")
 
     async def _run():
@@ -849,7 +859,8 @@ def test_timing_log_marks_stale_on_fallback(
 
     timing_lines = [r.message for r in caplog.records if "acquire_project " in r.message]
     assert timing_lines, "No timing line emitted on stale path"
-    assert "stale=true" in timing_lines[-1]
+    payload = json.loads(timing_lines[-1][len("acquire_project "):])
+    assert payload["stale"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1127,6 +1138,479 @@ def test_tools_list_schema_stays_under_byte_budget():
         f"a Field description drifted longer (trim it — per-turn token cost "
         f"is real). See OPTIMIZATION_PLAN_V2.md T7.5 / item 6."
     )
+
+
+# ---------------------------------------------------------------------------
+# Contention: writer holds lock, readers queue, run concurrently post-release
+# ---------------------------------------------------------------------------
+
+
+def test_contention_writer_blocks_readers_then_readers_run_concurrently(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Writer holds the lock, two readers queue, verify readers run in parallel
+    the moment the writer releases.
+
+    This is the post-review behavioral test: it exercises the *dynamic*
+    interaction between the exclusive and shared modes, not just each one
+    in isolation. Previous tests showed (a) readers can be concurrent and
+    (b) writers exclude readers — but neither proved that release
+    ordering is correct. A bug in ``notify_all`` (e.g. waking only one
+    waiter) would still pass the isolation tests but serialize the
+    readers here.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    writer_entered = asyncio.Event()
+    writer_release_ok = asyncio.Event()
+
+    reader_max_concurrent = 0
+    readers_in_body = 0
+
+    async def writer():
+        async with acquire_project(fake_project, mode="write", force_pull=True):
+            writer_entered.set()
+            # Hold the writer for a beat so readers queue up behind us.
+            await asyncio.wait_for(writer_release_ok.wait(), timeout=1.0)
+
+    async def reader(tag: str):
+        nonlocal reader_max_concurrent, readers_in_body
+        # Wait for writer to be in the critical section before requesting.
+        # This guarantees we queue behind an active writer, not race it.
+        await writer_entered.wait()
+        async with acquire_project(fake_project, mode="read") as ctx:
+            # ctx unused — just holding the lock. Acknowledge to pyright.
+            del ctx
+            readers_in_body += 1
+            reader_max_concurrent = max(reader_max_concurrent, readers_in_body)
+            await asyncio.sleep(0.02)
+            readers_in_body -= 1
+        return tag
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            w = asyncio.create_task(writer())
+            r1 = asyncio.create_task(reader("a"))
+            r2 = asyncio.create_task(reader("b"))
+            # Let readers queue up behind the writer, then release.
+            await writer_entered.wait()
+            await asyncio.sleep(0.02)  # give readers time to block on shared()
+            writer_release_ok.set()
+            results = await asyncio.gather(r1, r2, w)
+
+        assert sorted(x for x in results if x is not None) == ["a", "b"]
+        # Critical: after the writer released, the two readers ran in
+        # parallel (max concurrency ≥ 2), not one-after-the-other.
+        assert reader_max_concurrent >= 2, (
+            f"Readers serialized after writer release (max={reader_max_concurrent}); "
+            "writer.exit did not wake both shared waiters"
+        )
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# Write-mode: lock held continuously across Phase 1 (refresh) and Phase 2 (body)
+# ---------------------------------------------------------------------------
+
+
+def test_write_mode_takes_single_continuous_exclusive_lock(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Happy-path write-mode MUST take exactly one exclusive lock and
+    ZERO shared locks — the refresh and body run under a single,
+    continuous exclusive hold.
+
+    Why two counters? Two different regressions break this invariant:
+
+    1. **Pre-fix structure** — Phase 1 takes exclusive, releases, Phase 2
+       re-takes exclusive. Counter: ``exclusive=2, shared=0``.
+       Caught by the first assertion.
+    2. **Continuous-lock fall-through** — write-mode branch skipped, body
+       runs under the read-mode shared lock. Counter:
+       ``exclusive=1, shared=1``. Caught by the second assertion.
+
+    A timing-based reader-mid-write probe couldn't reliably detect
+    either: the pre-fix gap between release and re-acquire is µs wide
+    and scheduler-dependent, and the shared fall-through produces no
+    observable timing anomaly at all. Direct instrumentation of the
+    lock state transitions is deterministic and catches both.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    rwlock = git_ops._rwlock_for(fake_project.project_id)
+
+    exclusive_count = 0
+    shared_count = 0
+    original_exclusive = rwlock.exclusive
+    original_shared = rwlock.shared
+
+    @asynccontextmanager
+    async def counting_exclusive():
+        nonlocal exclusive_count
+        async with original_exclusive():
+            exclusive_count += 1
+            yield
+
+    @asynccontextmanager
+    async def counting_shared():
+        nonlocal shared_count
+        async with original_shared():
+            shared_count += 1
+            yield
+
+    # Instance-level rebind, not class-level — rwlock is reset between
+    # tests by _reset_module_caches, so no cross-test leak.
+    rwlock.exclusive = counting_exclusive  # type: ignore[method-assign]
+    rwlock.shared = counting_shared  # type: ignore[method-assign]
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.ensure_repo", return_value=fake_repo):
+            async with acquire_project(fake_project, mode="write", force_pull=True):
+                pass
+
+    asyncio.run(_run())
+
+    assert exclusive_count == 1, (
+        f"write-mode acquired exclusive {exclusive_count} times; expected "
+        "1 (refresh + body under a single continuous lock). "
+        "count=2 means Phase 1 released and Phase 2 re-acquired."
+    )
+    assert shared_count == 0, (
+        f"write-mode acquired shared {shared_count} times; expected 0. "
+        "shared>=1 means write-mode fell through to the read-mode body "
+        "path, which runs tool writes under a reader lock — unsafe."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Retry backoff sleep must NOT hold the writer lock
+# ---------------------------------------------------------------------------
+
+
+def test_transient_retry_releases_lock_during_backoff(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """During the 0.5–1.5 s retry backoff, another tool call MUST be able
+    to run against the same project.
+
+    Pre-fix: ``time.sleep`` ran inside ``_run_blocking`` while the writer
+    lock was held, blocking every concurrent tool against the same
+    project for the full backoff duration. Post-fix: ``acquire_project``
+    releases the writer lock, awaits the backoff via ``asyncio.sleep``,
+    then re-acquires.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    # Backoff is long enough that a lock-holding implementation would
+    # never finish before the competing reader's timeout. When the fix
+    # is in place, the reader completes well before the backoff ends.
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.3, 0.3))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    # First pull: transient failure. Every subsequent pull (second writer
+    # attempt, reader's pull) succeeds. Function form avoids the
+    # StopIteration that an `itertools`-style list raises when the reader
+    # bumps the counter past the list length.
+    pull_counter = {"n": 0}
+
+    def pull_side_effect(*_args, **_kwargs):
+        pull_counter["n"] += 1
+        if pull_counter["n"] == 1:
+            raise GitCommandError("pull", 1, b"", b"early EOF")
+        return None
+
+    fake_repo.remotes.origin.pull.side_effect = pull_side_effect
+    reader_entered_during_backoff = False
+
+    async def write_caller_that_retries():
+        async with acquire_project(fake_project, mode="write", force_pull=True):
+            pass
+
+    async def reader_during_backoff():
+        nonlocal reader_entered_during_backoff
+        # Give the writer a short head-start so it has: (a) acquired
+        # exclusive, (b) run its first pull attempt in the worker thread,
+        # (c) classified the GitCommandError as transient, (d) released
+        # exclusive, (e) begun the asyncio.sleep(0.3) backoff. With mocked
+        # pull raising immediately, steps (a)–(e) take microseconds to
+        # single-digit milliseconds. 0.05s is two orders of magnitude more
+        # than needed — plenty of margin for a loaded CI box.
+        #
+        # Proof of the fix: with the writer in its async backoff sleep
+        # (lock released), a shared reader acquire completes well under
+        # our 0.2s timeout. With the pre-fix behavior (sync time.sleep
+        # inside _run_blocking while holding exclusive), reader would
+        # block the full remaining ~0.25s and hit the timeout.
+        await asyncio.sleep(0.05)
+        try:
+            await asyncio.wait_for(
+                _take_reader_briefly(fake_project), timeout=0.2
+            )
+            reader_entered_during_backoff = True
+        except asyncio.TimeoutError:
+            pass
+
+    async def _run():
+        with patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo):
+            await asyncio.gather(
+                write_caller_that_retries(),
+                reader_during_backoff(),
+            )
+        assert reader_entered_during_backoff, (
+            "Reader was blocked during retry backoff — the writer lock is "
+            "still being held across the asyncio.sleep, defeating the fix"
+        )
+
+    asyncio.run(_run())
+
+
+async def _take_reader_briefly(project: ProjectConfig) -> None:
+    """Acquire a shared lock, confirm it, and release. Used by the
+    contention test to prove the writer released during its backoff.
+    """
+    async with acquire_project(project, mode="read") as _ctx:
+        del _ctx
+        # No body — just proving the acquisition succeeded.
+
+
+# ---------------------------------------------------------------------------
+# sync_project: transient retry must release the lock during backoff
+# ---------------------------------------------------------------------------
+
+
+def test_sync_project_retry_releases_lock_during_backoff(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Same invariant as the acquire_project retry test, but for
+    ``sync_project``: when the first pull attempt fails transiently, the
+    writer lock must be released during the backoff so a concurrent
+    read tool can run.
+
+    Pre-fix: sync_project called ``ensure_repo`` with the default
+    ``_retry_sync=True``, so the retry ``time.sleep`` ran inside the
+    worker thread while the coroutine held exclusive — blocking every
+    other tool call against the same project for 0.5–1.5s.
+    Post-fix: sync_project mirrors acquire_project's release-sleep-
+    reacquire pattern at the async layer.
+    """
+    from overleaf_mcp.tools import sync_project as sync_project_tool
+
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.3, 0.3))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    pull_counter = {"n": 0}
+
+    def pull_side_effect(*_args, **_kwargs):
+        pull_counter["n"] += 1
+        if pull_counter["n"] == 1:
+            raise GitCommandError("pull", 1, b"", b"early EOF")
+        return None
+
+    fake_repo.remotes.origin.pull.side_effect = pull_side_effect
+    # Not-dirty so sync_project proceeds into the refresh path
+    fake_repo.is_dirty = MagicMock(return_value=False)
+    reader_completed_during_backoff = False
+
+    async def _run_sync():
+        async with _reader_after_delay(fake_project, 0.05, 0.2) as completed:
+            result = await sync_project_tool(
+                project_id=fake_project.project_id,
+                git_token=fake_project.git_token,
+            )
+            # sync_project succeeds after the retry — no error prefix
+            assert not result.startswith("Error:"), (
+                f"sync_project returned an error: {result!r}"
+            )
+            assert "Synced" in result
+            # The reader's completion event is set iff it acquired shared
+            # during the writer's backoff (lock released).
+            return completed["done"]
+
+    # Patch Repo in BOTH modules — tools.py uses ``Repo(repo_path)`` for
+    # the is_dirty pre-flight; git_ops.py uses it for ensure_repo's
+    # existing-clone path.
+    with (
+        patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        patch("overleaf_mcp.tools.Repo", return_value=fake_repo),
+    ):
+        reader_completed_during_backoff = asyncio.run(_run_sync())
+
+    assert reader_completed_during_backoff, (
+        "Reader was blocked during sync_project's retry backoff — "
+        "the writer lock is still held across the sleep"
+    )
+
+
+@asynccontextmanager
+async def _reader_after_delay(project, start_delay, timeout):
+    """Helper: spawn a reader coroutine that waits ``start_delay`` seconds,
+    then tries to take a shared lock with a ``timeout`` ceiling. Yields
+    a dict that gets ``done=True`` iff the reader acquired successfully.
+    """
+    state = {"done": False}
+
+    async def _reader():
+        await asyncio.sleep(start_delay)
+        try:
+            await asyncio.wait_for(_take_reader_briefly(project), timeout=timeout)
+            state["done"] = True
+        except asyncio.TimeoutError:
+            pass
+
+    task = asyncio.create_task(_reader())
+    try:
+        yield state
+        await task
+    except BaseException:
+        task.cancel()
+        raise
+
+
+# ---------------------------------------------------------------------------
+# URL redaction: tokens must never leak into log lines / warnings / envelopes
+# ---------------------------------------------------------------------------
+
+
+def test_redact_url_strips_basic_auth_userinfo():
+    """The redaction helper replaces ``user:TOKEN@host`` with ``<redacted>@host``."""
+    from overleaf_mcp.git_ops import _redact_url
+
+    msg = "fatal: Authentication failed for 'https://git:SECRET_TOKEN@git.overleaf.com/abc/'"
+    out = _redact_url(msg)
+    assert "SECRET_TOKEN" not in out
+    assert "<redacted>@git.overleaf.com/abc/" in out
+    # Scheme + host retained so the message is still diagnostic
+    assert "https://" in out
+
+
+def test_redact_url_no_op_when_no_userinfo():
+    """Strings without userinfo pass through unchanged."""
+    from overleaf_mcp.git_ops import _redact_url
+
+    assert _redact_url("no URL here") == "no URL here"
+    assert _redact_url("https://git.overleaf.com/abc") == "https://git.overleaf.com/abc"
+
+
+# ---------------------------------------------------------------------------
+# asyncio.TimeoutError → stale fallback (Issue D from deep-RCA)
+# ---------------------------------------------------------------------------
+
+
+def test_timeout_falls_back_to_stale_snapshot_when_clone_exists(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """A git-op TimeoutError on an existing clone MUST fall back to the
+    local snapshot with a visible ⚠ warning — not propagate as an
+    unhandled exception.
+
+    Before Fix D, ``asyncio.wait_for`` in ``_run_blocking`` would raise
+    ``asyncio.TimeoutError`` past every layer and surface to the MCP
+    client as a generic transport error. Readers get no signal that
+    their tool result is still usable against the last-known-good
+    snapshot.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    (tmp_path / fake_project.project_id).mkdir()  # local clone exists
+
+    fake_repo = _make_fake_repo()
+
+    async def _raise_timeout(*_args, **_kwargs):
+        raise asyncio.TimeoutError()
+
+    async def _run():
+        # Patch _run_blocking to short-circuit with TimeoutError so we
+        # exercise the except branch without actually waiting on a
+        # wedged subprocess.
+        with (
+            patch("overleaf_mcp.git_ops._run_blocking", side_effect=_raise_timeout),
+            patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        ):
+            async with acquire_project(fake_project, mode="read") as ctx:
+                assert ctx.repo is fake_repo, (
+                    "TimeoutError fallback did not yield the local snapshot"
+                )
+                assert len(ctx.warnings) == 1, (
+                    f"Expected exactly one warning, got {ctx.warnings!r}"
+                )
+                w = ctx.warnings[0]
+                assert "could not refresh" in w
+                assert "timed out" in w
+                # Seconds number is present — the user needs to know the
+                # ceiling so they can raise OVERLEAF_GIT_TIMEOUT if the
+                # project genuinely takes longer.
+                assert "s" in w
+
+    asyncio.run(_run())
+
+
+def test_timeout_propagates_on_cold_start_when_no_snapshot(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Cold-start clone timeout has no snapshot to fall back to, so the
+    TimeoutError MUST propagate. Silent success on a never-cloned
+    project would be worse than a loud error — the tool body would
+    execute against an empty / nonexistent repo.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    # Note: NO local clone created — project dir does NOT exist.
+    assert not (tmp_path / fake_project.project_id).exists()
+
+    async def _raise_timeout(*_args, **_kwargs):
+        raise asyncio.TimeoutError()
+
+    async def _run():
+        with (
+            patch("overleaf_mcp.git_ops._run_blocking", side_effect=_raise_timeout),
+            pytest.raises(asyncio.TimeoutError),
+        ):
+            async with acquire_project(fake_project, mode="read"):
+                pass  # pragma: no cover — acquire should raise before yield
+
+    asyncio.run(_run())
+
+
+def test_stale_warning_contains_redacted_url_not_token(
+    fake_project: ProjectConfig, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """When ensure_repo raises StaleRepoWarning, the embedded URL is redacted.
+
+    This is the critical fix for token leakage identified in code review.
+    The ``⚠ could not refresh`` warning that reaches tool output must
+    never contain the Basic-auth token.
+    """
+    monkeypatch.setattr(git_ops, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setenv("OVERLEAF_PULL_TTL", "0")
+    monkeypatch.setattr(git_ops, "_RETRY_DELAY_RANGE", (0.0, 0.0))
+    (tmp_path / fake_project.project_id).mkdir()
+
+    fake_repo = _make_fake_repo()
+    # Git error with the token embedded in the URL — the exact shape of
+    # what GitPython surfaces when the pull fails mid-request.
+    fake_repo.remotes.origin.pull.side_effect = GitCommandError(
+        "pull", 128, b"",
+        b"fatal: Authentication failed for 'https://git:LEAKED_TOKEN@git.overleaf.com/abc/'",
+    )
+
+    with (
+        patch("overleaf_mcp.git_ops.Repo", return_value=fake_repo),
+        pytest.raises(StaleRepoWarning) as excinfo,
+    ):
+        ensure_repo(fake_project)
+
+    # Token must NOT appear in the exception message.
+    assert "LEAKED_TOKEN" not in str(excinfo.value), (
+        f"Token leaked into StaleRepoWarning: {excinfo.value}"
+    )
+    assert "<redacted>@" in str(excinfo.value)
 
 
 def test_tools_list_schema_has_all_fifteen_tools():

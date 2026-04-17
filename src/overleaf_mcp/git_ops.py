@@ -112,6 +112,38 @@ class StaleRepoWarning(Exception):
     """
 
 
+class _TransientPullError(Exception):
+    """Internal signal: pull failed transiently, one retry is advised.
+
+    Distinguishes "retry-worthy network blip" from the permanent
+    :class:`StaleRepoWarning` path. Raised by ``ensure_repo(..., _retry_sync=False)``
+    so ``acquire_project`` can orchestrate the retry with an *async* sleep
+    outside the writer lock, rather than letting a ``time.sleep`` inside
+    the worker thread hold the exclusive lock against every concurrent tool.
+    """
+
+
+# Redacts ``user:password@`` or ``user@`` from http(s) URLs embedded in
+# strings. Git remote URLs carry the auth token as HTTPS Basic
+# (``https://git:TOKEN@host/...``), and ``GitCommandError.stderr`` often
+# echoes the URL verbatim. Without redaction that text flows into log
+# lines, the stale-repo warning attached to tool output, and the
+# structured envelope — any of which may be captured by end users or
+# shipped to observability pipelines. The replacement leaves the scheme
+# and host intact so the message stays diagnostic.
+_URL_USERINFO_PATTERN = re.compile(r"(https?://)[^/\s@]+@")
+
+
+def _redact_url(msg: str) -> str:
+    """Strip userinfo (``user:password@``) from HTTP(S) URLs in *msg*.
+
+    Safe to call on any string — returns *msg* unchanged if no matches
+    are found. Used at every boundary where a :class:`GitCommandError`
+    message crosses into logs, exceptions, or tool output.
+    """
+    return _URL_USERINFO_PATTERN.sub(r"\1<redacted>@", msg)
+
+
 # Module-level state. Process-local, no cross-invocation persistence.
 #
 # _LAST_PULL:        (project_id, token_hash) -> monotonic timestamp of last
@@ -297,19 +329,35 @@ def validate_path(base_path: Path, target_path: str) -> Path:
     return resolved
 
 
-def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
+def ensure_repo(
+    project: ProjectConfig,
+    *,
+    force_pull: bool = False,
+    _retry_sync: bool = True,
+) -> Repo:
     """Ensure the repository is cloned and acceptably fresh.
 
     * First call for a project: full clone (no TTL bypass possible).
     * Subsequent calls: pull only if the last successful pull is older than
       ``OVERLEAF_PULL_TTL`` seconds, OR if ``force_pull=True``. Write tools
       must pass ``force_pull=True`` so a commit is never based on stale state.
-    * Pull failures on an existing clone are raised as ``StaleRepoWarning`` —
+    * Pull failures on an existing clone are raised as ``StaleRepoWarning``
+      (permanent) or :class:`_TransientPullError` (one retry advised) —
       caller decides whether to serve stale data with a warning or abort.
+
+    The ``_retry_sync`` kwarg controls whether the one-shot transient retry
+    runs inline (default, ``time.sleep`` in the same thread) or is deferred
+    to the caller via :class:`_TransientPullError`. ``acquire_project`` uses
+    ``_retry_sync=False`` so the retry sleep happens at the asyncio level
+    with the writer lock released — see that function for the rationale.
 
     NOTE: Callers must hold the per-project lock (see ``acquire_project``)
     when calling this. Without the lock, two concurrent callers can both
     pass the TTL check and race on GitPython's non-thread-safe index.
+
+    All user-visible messages (log lines, ``StaleRepoWarning`` payload,
+    ``_TransientPullError`` payload) are URL-redacted via :func:`_redact_url`
+    so the Basic-auth token embedded in the remote URL never leaks.
     """
     repo_path = get_repo_path(project.project_id)
     git_url = _build_git_url(project)
@@ -360,11 +408,17 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
         origin.pull()
         _LAST_PULL[cache_key] = now
     except GitCommandError as e:
-        msg = str(e).strip()
-        # One transparent retry for transient failures only (network blip,
-        # upstream 5xx). Permanent failures (auth, missing ref) skip the
-        # retry — they'll just fail twice and waste a round-trip.
-        if _is_transient_pull_error(msg):
+        raw_msg = str(e).strip()
+        redacted_msg = _redact_url(raw_msg)
+        # Transient vs permanent: classify on the raw text (patterns don't
+        # care about the redaction), surface only the redacted text.
+        if _is_transient_pull_error(raw_msg):
+            if not _retry_sync:
+                # Caller (acquire_project) will handle the retry with an
+                # async sleep outside the writer lock.
+                raise _TransientPullError(redacted_msg) from e
+            # Inline sync retry — kept for direct callers (tests,
+            # sync_project) that aren't in the async-lock path.
             # nosec B311 -- jitter for retry backoff, not a security primitive.
             # random.uniform is used here purely to de-synchronize retries
             # across concurrent callers (avoid thundering-herd on a recovering
@@ -372,7 +426,7 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
             delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
             logger.info(
                 "pull failed transiently for %s (retry in %.2fs): %s",
-                project.project_id, delay, msg,
+                project.project_id, delay, redacted_msg,
             )
             time.sleep(delay)
             try:
@@ -380,15 +434,15 @@ def ensure_repo(project: ProjectConfig, *, force_pull: bool = False) -> Repo:
                 _LAST_PULL[cache_key] = time.monotonic()
                 return repo
             except GitCommandError as retry_e:
-                msg = str(retry_e).strip()
+                retry_redacted = _redact_url(str(retry_e).strip())
                 logger.warning(
                     "pull failed twice for %s (giving up): %s",
-                    project.project_id, msg,
+                    project.project_id, retry_redacted,
                 )
-                raise StaleRepoWarning(msg) from retry_e
+                raise StaleRepoWarning(retry_redacted) from retry_e
         # Caller gets the local snapshot with a warning attached.
-        logger.warning("pull failed for %s: %s", project.project_id, msg)
-        raise StaleRepoWarning(msg) from e
+        logger.warning("pull failed for %s: %s", project.project_id, redacted_msg)
+        raise StaleRepoWarning(redacted_msg) from e
     return repo
 
 
@@ -473,6 +527,95 @@ class ToolContext:
         return out
 
 
+async def _refresh_once(
+    project: ProjectConfig, *, force_pull: bool
+) -> tuple[Repo | None, list[str], bool, str | None]:
+    """Single refresh attempt in a worker thread.
+
+    Returns ``(repo, warnings, stale, transient_msg)``:
+      * ``transient_msg`` non-``None`` → caller should retry (lock must
+        be released first so the sleep doesn't starve concurrent tools);
+        ``repo`` is ``None`` in this case.
+      * ``stale=True`` → pull didn't complete (permanent failure OR
+        ``OVERLEAF_GIT_TIMEOUT`` ceiling hit); ``repo`` is the local
+        snapshot, ``warnings`` includes the user-facing refresh-failed
+        line. Caller gets to serve a response against the last-known
+        good state rather than bubbling an exception to the user.
+      * Otherwise → happy path, fresh ``repo`` with no warnings.
+
+    Raises :class:`asyncio.TimeoutError` **only** when the git op times
+    out AND there is no local snapshot to fall back to (cold-start
+    timeout). The hot-path timeout is absorbed into the stale-fallback
+    branch so a wedged network never turns a read tool into an
+    unhandled exception.
+    """
+    try:
+        repo = await _run_blocking(
+            ensure_repo, project, force_pull=force_pull, _retry_sync=False
+        )
+        return repo, [], False, None
+    except _TransientPullError as te:
+        return None, [], False, str(te).strip()
+    except StaleRepoWarning as w:
+        # ensure_repo already redacted the message; no double-redact needed.
+        msg = str(w).strip()
+        logger.info("serving stale snapshot for %s: %s", project.project_id, msg)
+        repo = Repo(get_repo_path(project.project_id))
+        return repo, [f"⚠ could not refresh from Overleaf: {msg}"], True, None
+    except asyncio.TimeoutError:
+        # Git op exceeded OVERLEAF_GIT_TIMEOUT. Parallel to the
+        # StaleRepoWarning branch — we can't refresh, but we can serve
+        # the local snapshot with a user-visible warning so the caller
+        # isn't left with an unhandled exception. Cold-start case (no
+        # local clone) has nothing to serve; re-raise so the tool call
+        # fails cleanly with the timeout it was.
+        timeout_s = _git_timeout()
+        repo_path = get_repo_path(project.project_id)
+        if not repo_path.exists():
+            logger.warning(
+                "cold-start clone for %s timed out after %.1fs; no local "
+                "snapshot available", project.project_id, timeout_s,
+            )
+            raise
+        logger.warning(
+            "pull for %s timed out after %.1fs; serving local snapshot",
+            project.project_id, timeout_s,
+        )
+        repo = Repo(repo_path)
+        warning = (
+            f"⚠ could not refresh from Overleaf: "
+            f"pull timed out after {timeout_s:.1f}s"
+        )
+        return repo, [warning], True, None
+
+
+def _emit_timing_log(
+    project: ProjectConfig, mode: str, elapsed_ms: float, stale: bool
+) -> None:
+    """Emit the ``OVERLEAF_TIMING=1`` log line as JSON.
+
+    Format (stable interface — see docs/API.md#observability):
+        acquire_project {"project":"<id>","mode":"read|write","elapsed_ms":N.N,"stale":bool}
+
+    JSON keeps the line parseable by downstream log pipelines without
+    regex gymnastics. The ``acquire_project`` prefix is preserved so
+    existing greps still locate the line.
+    """
+    # TODO(1.2.0 / HTTP transport): include the tool name in this payload.
+    # Under stdio each MCP call flows through acquire_project exactly once,
+    # so elapsed_ms is already effectively per-tool — the caller correlates
+    # against the immediately preceding tool invocation. Once HTTP
+    # multiplexes clients, concurrent calls against the same project become
+    # indistinguishable by `mode` alone; add a `tool` field then.
+    payload = {
+        "project": project.project_id,
+        "mode": mode,
+        "elapsed_ms": round(elapsed_ms, 1),
+        "stale": stale,
+    }
+    logger.info("acquire_project %s", json.dumps(payload))
+
+
 @asynccontextmanager
 async def acquire_project(
     project: ProjectConfig,
@@ -482,67 +625,100 @@ async def acquire_project(
 ) -> AsyncIterator[ToolContext]:
     """Acquire per-project RW lock, prepare the repo, yield a ``ToolContext``.
 
-    This is the single entry point for every tool branch. Two-phase design:
+    This is the single entry point for every tool branch. Design:
 
-      Phase 1 (refresh, always exclusive): runs :func:`ensure_repo` under the
-      writer lock. Holding exclusive here serializes concurrent pulls against
-      the same project — necessary because two parallel pulls race on
-      ``.git/HEAD`` and ``.git/index``. For TTL-cache-fresh calls the writer
-      lock is held for ~µs (no I/O happens). On :class:`StaleRepoWarning`,
-      falls back to the local snapshot with a visible warning attached.
+      Phase 1 (refresh, exclusive): runs :func:`ensure_repo` under the
+      writer lock. Holding exclusive here serializes concurrent pulls
+      against the same project — necessary because two parallel pulls
+      race on ``.git/HEAD`` and ``.git/index``. For TTL-cache-fresh calls
+      the writer lock is held for ~µs (no I/O happens). On
+      :class:`StaleRepoWarning` the local snapshot is served with a
+      visible warning attached.
 
-      Phase 2 (tool body): re-acquires the lock per ``mode`` —
+      Retry (transient pull failure): the writer lock is **released**
+      before the backoff sleep and re-acquired for the second attempt,
+      so a 0.5–1.5 s hiccup doesn't block every other tool call against
+      the same project. This is why ``ensure_repo`` is invoked with
+      ``_retry_sync=False`` — the async layer owns the retry pacing.
+
+      Phase 2 (tool body): lock held per ``mode`` —
       ``mode="read"`` takes shared (multiple readers run concurrently);
-      ``mode="write"`` takes exclusive (full v1 serialization preserved).
+      ``mode="write"`` holds the exclusive lock *continuously* from the
+      refresh phase through the body, so no reader can slip in between
+      refresh and write. The lock is never released between phases for
+      writers — this is what preserves refresh→write atomicity even
+      after the retry restructure.
 
-    Mode defaults to ``read`` so any caller that omits the kwarg gets the
-    safe-and-fast read path. Write tools must pass ``mode="write"``
+    Mode defaults to ``read`` so any caller that omits the kwarg gets
+    the safe-and-fast read path. Write tools must pass ``mode="write"``
     explicitly. Mixing ``force_pull=False`` with ``mode="write"`` is
     permitted but unusual — write tools normally pair both flags.
 
-    Observability: when ``OVERLEAF_TIMING=1`` is set, emits a structured
-    INFO log line on context exit with project, mode, elapsed_ms, and
-    stale flag. Costs nothing when off (one env-var lookup per call).
+    Observability: when ``OVERLEAF_TIMING=1`` is set, emits a JSON log
+    line on context exit with project, mode, elapsed_ms, and stale flag.
+    Costs nothing when off (one env-var lookup per call). Format is
+    documented in docs/API.md#observability as a stable interface.
     """
     rwlock = _rwlock_for(project.project_id)
     timing_on = os.environ.get("OVERLEAF_TIMING") == "1"
     started = time.monotonic() if timing_on else 0.0
     stale = False
 
-    # Phase 1: refresh under exclusive (writer) lock.
-    warnings: list[str] = []
-    repo: Repo
-    async with rwlock.exclusive():
-        try:
-            repo = await _run_blocking(ensure_repo, project, force_pull=force_pull)
-        except StaleRepoWarning as w:
-            logger.info("serving stale snapshot for %s: %s", project.project_id, w)
-            repo_path = get_repo_path(project.project_id)
-            repo = Repo(repo_path)
-            warnings = [f"⚠ could not refresh from Overleaf: {w}"]
-            stale = True
-
-    # Phase 2: tool body — shared for read, exclusive for write.
-    body_lock = rwlock.shared() if mode == "read" else rwlock.exclusive()
     try:
-        async with body_lock:
+        # --- First refresh attempt under exclusive lock ---
+        async with rwlock.exclusive():
+            repo, warnings, stale, transient_msg = await _refresh_once(
+                project, force_pull=force_pull
+            )
+            if transient_msg is None and mode == "write":
+                # Happy path / permanent stale fallback, write mode:
+                # hold the exclusive lock straight through into the body
+                # so no reader can slip in between refresh and write.
+                # Type-narrowing assertion; _refresh_once's contract guarantees
+                # non-None repo when transient_msg is None.
+                assert repo is not None  # nosec B101
+                yield ToolContext(repo=repo, warnings=warnings)
+                return
+
+        # --- Retry path: first attempt was transient. Sleep OUTSIDE the
+        # lock so the 0.5–1.5 s backoff doesn't starve concurrent tools
+        # that would otherwise be blocked on the writer lock. ---
+        if transient_msg is not None:
+            # nosec B311 -- jitter for retry backoff, not a security primitive.
+            delay = random.uniform(*_RETRY_DELAY_RANGE)  # nosec B311
+            logger.info(
+                "pull failed transiently for %s (retry in %.2fs): %s",
+                project.project_id, delay, transient_msg,
+            )
+            await asyncio.sleep(delay)
+
+            async with rwlock.exclusive():
+                repo, warnings, stale, transient2 = await _refresh_once(
+                    project, force_pull=force_pull
+                )
+                if transient2 is not None:
+                    # Second transient failure → promote to stale fallback.
+                    logger.warning(
+                        "pull failed twice for %s (giving up): %s",
+                        project.project_id, transient2,
+                    )
+                    repo = Repo(get_repo_path(project.project_id))
+                    warnings = [f"⚠ could not refresh from Overleaf: {transient2}"]
+                    stale = True
+                if mode == "write":
+                    assert repo is not None  # nosec B101 -- see note above
+                    yield ToolContext(repo=repo, warnings=warnings)
+                    return
+
+        # --- Read-mode body under shared lock ---
+        # Type-narrowing; read-mode fallthrough always sets repo.
+        assert repo is not None  # nosec B101
+        async with rwlock.shared():
             yield ToolContext(repo=repo, warnings=warnings)
     finally:
         if timing_on:
             elapsed_ms = (time.monotonic() - started) * 1000.0
-            # TODO(1.2.0 / HTTP transport): include the tool name in this line.
-            # Under stdio each MCP call flows through acquire_project exactly
-            # once, so elapsed_ms is already effectively per-tool — the caller
-            # correlates against the immediately preceding tool invocation.
-            # Once HTTP multiplexes clients, concurrent calls against the same
-            # project become indistinguishable by `mode` alone; add a
-            # `tool=<name>` field then. Requires threading the tool name down
-            # from tools.py (contextvars, or an explicit kwarg on acquire_project).
-            logger.info(
-                "acquire_project project=%s mode=%s elapsed_ms=%.1f stale=%s",
-                project.project_id, mode, elapsed_ms,
-                "true" if stale else "false",
-            )
+            _emit_timing_log(project, mode, elapsed_ms, stale)
 
 
 def config_git_user(repo: Repo) -> None:
