@@ -56,7 +56,7 @@ For the full per-tool parameter reference, see [`docs/API.md`](docs/API.md).
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/overleaf-mcp.git
+git clone https://github.com/imewei/overleaf-mcp.git
 cd overleaf-mcp
 
 # Create virtual environment
@@ -70,7 +70,7 @@ pip install -e .
 ### Install with uv (faster)
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/overleaf-mcp.git
+git clone https://github.com/imewei/overleaf-mcp.git
 cd overleaf-mcp
 
 uv venv

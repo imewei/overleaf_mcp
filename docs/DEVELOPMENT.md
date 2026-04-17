@@ -13,7 +13,7 @@ Everything you need to hack on this server locally.
 ## Setup
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/overleaf-mcp.git
+git clone https://github.com/imewei/overleaf-mcp.git
 cd overleaf-mcp
 
 # Install runtime + dev deps in a local .venv
