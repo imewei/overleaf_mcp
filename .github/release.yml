@@ -1,0 +1,20 @@
+# Groups GitHub's auto-generated release notes by conventional-commit type.
+# Applied when `generate_release_notes: true` is used in the release workflow.
+changelog:
+  categories:
+    - title: Features
+      labels: ["feat", "feature", "enhancement"]
+    - title: Bug Fixes
+      labels: ["fix", "bug"]
+    - title: Performance
+      labels: ["perf"]
+    - title: Refactoring
+      labels: ["refactor"]
+    - title: Documentation
+      labels: ["docs"]
+    - title: Build & CI
+      labels: ["build", "ci", "chore"]
+    - title: Other Changes
+      labels: ["*"]
+  exclude:
+    labels: ["ignore-for-release", "duplicate"]

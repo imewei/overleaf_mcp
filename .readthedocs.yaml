@@ -1,0 +1,25 @@
+# Read the Docs build configuration
+# Reference: https://docs.readthedocs.io/en/stable/config-file/v2.html
+version: 2
+
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.13"
+  jobs:
+    # Install uv into RTD's build image, then sync into RTD's own virtualenv
+    # (UV_PROJECT_ENVIRONMENT) so autodoc can import the installed package.
+    post_create_environment:
+      - pip install uv
+    post_install:
+      # No --frozen: uv.lock is gitignored (see .gitignore). RTD resolves
+      # fresh from pyproject.toml, matching the documented policy.
+      - UV_PROJECT_ENVIRONMENT=$READTHEDOCS_VIRTUALENV_PATH uv sync --extra docs
+
+sphinx:
+  configuration: docs/source/conf.py
+  fail_on_warning: false
+
+formats:
+  - pdf
+  - htmlzip
