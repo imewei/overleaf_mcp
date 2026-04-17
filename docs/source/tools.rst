@@ -262,6 +262,23 @@ Returns: type, title, and a 200-char preview of each section's body.
 
 Return the full body of a section matched by its title (case-insensitive).
 
+.. list-table::
+    :header-rows: 1
+    :widths: 20 14 14 52
+
+    * - Param
+      - Type
+      - Required
+      - Description
+    * - ``file_path``
+      - ``str``
+      - ✓
+      - Path to the LaTeX file within the project
+    * - ``section_title``
+      - ``str``
+      - ✓
+      - Section title to match (case-insensitive)
+
 Errors list the available section titles, so a typo produces an
 actionable response rather than a dead-end.
 
@@ -416,6 +433,27 @@ count (many). Safer than a regex-based replacer for LLM-generated edits.
 Replace the entire file. Commits + pushes. Prefer :ref:`tool-edit-file`
 for small changes — smaller diffs, easier human review.
 
+.. list-table::
+    :header-rows: 1
+    :widths: 20 14 14 52
+
+    * - Param
+      - Type
+      - Required
+      - Description
+    * - ``file_path``
+      - ``str``
+      - ✓
+      - Path relative to project root
+    * - ``content``
+      - ``str``
+      - ✓
+      - New file content (overwrites existing file completely)
+    * - ``commit_message``
+      - ``str | None``
+      -
+      - Default: ``Rewrite <file_path>``
+
 .. _tool-update-section:
 
 ``update_section``
@@ -425,6 +463,31 @@ Replace the body of a LaTeX section by its title. The header itself is
 preserved; only the content between this section and the next is
 rewritten.
 
+.. list-table::
+    :header-rows: 1
+    :widths: 22 14 14 50
+
+    * - Param
+      - Type
+      - Required
+      - Description
+    * - ``file_path``
+      - ``str``
+      - ✓
+      - Path to the LaTeX file
+    * - ``section_title``
+      - ``str``
+      - ✓
+      - Section title to match (case-insensitive)
+    * - ``new_content``
+      - ``str``
+      - ✓
+      - Replacement body for the section (header is preserved)
+    * - ``commit_message``
+      - ``str | None``
+      -
+      - Default: ``Update section '<section_title>' in <file_path>``
+
 .. _tool-sync-project:
 
 ``sync_project``
@@ -433,6 +496,9 @@ rewritten.
 Explicit force-pull. Reports hard errors (stale-snapshot fallback is
 disabled for this tool — by design, this is the diagnostic escape
 hatch).
+
+No tool-specific parameters — accepts only the shared
+``project_name`` / ``git_token`` / ``project_id`` kwargs.
 
 .. list-table::
     :header-rows: 1
@@ -460,6 +526,23 @@ Delete
 
 Delete a path and commit the removal. Standard ``dry_run`` / ``push``
 semantics.
+
+.. list-table::
+    :header-rows: 1
+    :widths: 20 14 14 52
+
+    * - Param
+      - Type
+      - Required
+      - Description
+    * - ``file_path``
+      - ``str``
+      - ✓
+      - Path to delete (relative to project root)
+    * - ``commit_message``
+      - ``str | None``
+      -
+      - Default: ``Delete <file_path>``
 
 Error handling
 --------------

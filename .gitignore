@@ -61,3 +61,4 @@ dist/
 
 # Internal planning notes (historical, not part of the published docs)
 docs/superpowers/
+.DS_Store

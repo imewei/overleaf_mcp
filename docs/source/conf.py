@@ -4,6 +4,7 @@ Builds HTML docs with the Furo theme. Runs autodoc against the
 ``overleaf_mcp`` package so every public docstring surfaces here without
 being re-authored in RST.
 """
+
 from __future__ import annotations
 
 import sys
@@ -113,7 +114,7 @@ html_show_sphinx = False
 html_theme_options = {
     "sidebar_hide_name": False,
     "navigation_with_keys": True,
-    "source_repository": "https://github.com/imewei/overleaf-mcp",
+    "source_repository": "https://github.com/imewei/overleaf_mcp",
     "source_branch": "main",
     "source_directory": "docs/source/",
     "top_of_page_buttons": ["view", "edit"],
@@ -129,7 +130,7 @@ html_theme_options = {
     "footer_icons": [
         {
             "name": "GitHub",
-            "url": "https://github.com/imewei/overleaf-mcp",
+            "url": "https://github.com/imewei/overleaf_mcp",
             "html": (
                 '<svg stroke="currentColor" fill="currentColor" stroke-width="0"'
                 ' viewBox="0 0 16 16" height="1em" width="1em">'

@@ -8,9 +8,18 @@ Prerequisites
 
 - **Python 3.10+** (tested on 3.10, 3.11, 3.12, 3.13)
 - **Git** (GitPython shells out; we do not bundle a binary)
-- **``uv``** — the lockfile (``uv.lock``) is the single source of truth.
-  ``pip install -e .`` works for the happy path but won't give you the
-  reproducible environment CI uses.
+- **``uv``** (recommended) — resolves and installs against
+  ``pyproject.toml`` faster than pip and produces a deterministic
+  environment via ``uv sync``. ``pip install -e .`` also works for the
+  happy path.
+
+.. note::
+
+    ``uv.lock`` is currently ``.gitignore``\ d (see ``.gitignore`` line
+    52). CI resolves dependencies fresh from ``pyproject.toml`` on each
+    run. If you need byte-identical environments across machines,
+    either check in ``uv.lock`` locally or pin exact versions in
+    ``pyproject.toml``.
 
 Setup
 -----
