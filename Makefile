@@ -1,31 +1,121 @@
-# Makefile for overleaf_mcp — housekeeping targets only.
+# Makefile for overleaf_mcp — local development targets.
 #
 # Application functionality lives in the Python package (invoked as the
 # MCP server via `overleaf-mcp` or through Claude Desktop). This file
-# covers local cleanup operations you'd run between dev sessions or
-# before committing.
+# covers local dev workflows: pre-push verification, lint/type/test
+# wrappers, housekeeping, and pre-commit hook install.
 #
 # Default target is `help` — running `make` with no args never deletes
 # anything. Destructive targets (clean, clean-all) are opt-in by name.
 
-.PHONY: help clean clean-all
+.PHONY: help clean clean-all \
+        format lint type-check test \
+        verify verify-fast install-hooks
 
 # --- help -----------------------------------------------------------------
 
 help:
-	@echo "overleaf_mcp — housekeeping targets"
+	@echo "overleaf_mcp — development targets"
 	@echo ""
-	@echo "  make clean      Remove build, test, lint, and packaging artifacts."
-	@echo "                  Always safe; everything regenerated on next run."
+	@echo "Pre-push verification:"
+	@echo "  make verify        Full local CI: lint + type + bandit + tests."
+	@echo "                     Run this before 'git push'."
+	@echo "  make verify-fast   Quick: lint + type only (no tests)."
 	@echo ""
-	@echo "  make clean-all  clean + remove .venv/ and overleaf_cache/."
-	@echo "                  overleaf_cache/ will be re-cloned from Overleaf on"
-	@echo "                  next tool use — any uncommitted local changes"
-	@echo "                  there will be lost."
+	@echo "Quality:"
+	@echo "  make format        Auto-fix with ruff (lint --fix + format)."
+	@echo "  make lint          Ruff lint + format check (read-only)."
+	@echo "  make type-check    Mypy on src/overleaf_mcp."
+	@echo "  make test          Pytest."
+	@echo ""
+	@echo "Setup:"
+	@echo "  make install-hooks Install pre-commit git hooks."
+	@echo ""
+	@echo "Housekeeping:"
+	@echo "  make clean         Remove build, test, lint, and packaging artifacts."
+	@echo "                     Always safe; everything regenerated on next run."
+	@echo "  make clean-all     clean + remove .venv/ and overleaf_cache/."
+	@echo "                     overleaf_cache/ will be re-cloned from Overleaf on"
+	@echo "                     next tool use — any uncommitted local changes"
+	@echo "                     there will be lost."
 	@echo ""
 	@echo "Never cleaned (user data):"
 	@echo "  overleaf_config.json   — project IDs + Git tokens"
 	@echo "  docs/                  — plans and documentation you wrote"
+
+# --- quality wrappers -----------------------------------------------------
+# Thin wrappers around the same commands CI runs (.github/workflows/ci.yml).
+# Keep invocations identical so "local clean" ⇒ "CI clean".
+
+format:
+	@echo ">> Ruff lint --fix + format"
+	@uv run ruff check --fix src/overleaf_mcp tests
+	@uv run ruff format src/overleaf_mcp tests
+
+lint:
+	@echo ">> Ruff lint + format check"
+	@uv run ruff check src/overleaf_mcp tests
+	@uv run ruff format --check src/overleaf_mcp tests
+
+type-check:
+	@echo ">> Mypy (src/overleaf_mcp)"
+	@uv run mypy src/overleaf_mcp
+
+test:
+	@echo ">> Pytest"
+	@uv run pytest
+
+# --- verify ---------------------------------------------------------------
+# Full local CI: run before pushing. Patterned on rheojax/Makefile's
+# step-marked verify target. mypy is a HARD gate here — pyproject.toml
+# documents "mypy is clean for our own code", so a regression should
+# block the push. bandit is advisory (matches CI: continue-on-error).
+
+verify:
+	@echo "======================================"
+	@echo "  FULL LOCAL CI VERIFICATION"
+	@echo "======================================"
+	@echo ""
+	@echo "Step 1/4: Ruff lint + format check"
+	@uv run ruff check src/overleaf_mcp tests || { echo "Lint failed."; exit 1; }
+	@uv run ruff format --check src/overleaf_mcp tests || { echo "Format check failed — run 'make format'."; exit 1; }
+	@echo ""
+	@echo "Step 2/4: Mypy type check"
+	@uv run mypy src/overleaf_mcp || { echo "Type check failed."; exit 1; }
+	@echo ""
+	@echo "Step 3/4: Bandit security lint (advisory)"
+	@uv run bandit -r src/overleaf_mcp -c pyproject.toml || echo "(advisory: bandit reported findings — review and proceed.)"
+	@echo ""
+	@echo "Step 4/4: Pytest"
+	@uv run pytest || { echo "Tests failed."; exit 1; }
+	@echo ""
+	@echo "======================================"
+	@echo "  ALL CHECKS PASSED — SAFE TO PUSH"
+	@echo "======================================"
+
+verify-fast:
+	@echo "======================================"
+	@echo "  QUICK LOCAL CI VERIFICATION"
+	@echo "======================================"
+	@echo ""
+	@echo "Step 1/2: Ruff lint + format check"
+	@uv run ruff check src/overleaf_mcp tests || { echo "Lint failed."; exit 1; }
+	@uv run ruff format --check src/overleaf_mcp tests || { echo "Format check failed — run 'make format'."; exit 1; }
+	@echo ""
+	@echo "Step 2/2: Mypy type check"
+	@uv run mypy src/overleaf_mcp || { echo "Type check failed."; exit 1; }
+	@echo ""
+	@echo "======================================"
+	@echo "  QUICK CHECKS PASSED"
+	@echo "======================================"
+
+# --- pre-commit hooks -----------------------------------------------------
+
+install-hooks:
+	@echo ">> Installing pre-commit hooks"
+	@uv run pre-commit install
+	@echo "Done. Next 'git commit' runs ruff + mypy + bandit on staged files."
+	@echo "Use 'make verify' before pushing for full local CI."
 
 # --- clean ----------------------------------------------------------------
 # Targets every auto-generated cache or build artifact. Running this
