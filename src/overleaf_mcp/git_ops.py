@@ -394,8 +394,12 @@ def ensure_repo(
         origin.set_url(git_url)
 
     now = time.monotonic()
-    last = _LAST_PULL.get(cache_key, 0.0)
-    if not force_pull and (now - last) < _pull_ttl():
+    last = _LAST_PULL.get(cache_key)
+    # Missing key ⇒ infinitely stale (never pulled). Using a 0.0 sentinel would
+    # make "never pulled" look like "pulled at monotonic t=0", which on a fresh
+    # process with a young monotonic clock (e.g. freshly-booted CI runner where
+    # time.monotonic() < TTL) causes the first pull to be silently suppressed.
+    if not force_pull and last is not None and (now - last) < _pull_ttl():
         # Within TTL window — skip the network entirely.
         logger.debug(
             "pull suppressed by TTL (age=%.1fs, ttl=%.1fs, project=%s)",
@@ -405,11 +409,12 @@ def ensure_repo(
         )
         return repo
 
+    age = (now - last) if last is not None else float("inf")
     logger.debug(
         "pulling project %s (force=%s, age=%.1fs)",
         project.project_id,
         force_pull,
-        now - last,
+        age,
     )
     try:
         origin.pull()
