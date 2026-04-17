@@ -6,6 +6,7 @@ config file. No Git, no network, no async — just pydantic.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -140,5 +141,15 @@ def resolve_project(
             raise ValueError(
                 "Inline credentials require both 'git_token' and 'project_id'"
             )
-        return ProjectConfig(name="inline", project_id=project_id, git_token=git_token)
+        # Tag the name with a token-hash prefix so two different tenants
+        # passing the same project_id via inline creds are distinguishable
+        # in log lines and error messages. The hash never leaks the token
+        # itself — 8 hex chars of SHA-256 are one-way and collision-space
+        # of 2^32 is plenty for disambiguating concurrent callers.
+        token_hash = hashlib.sha256(git_token.encode()).hexdigest()[:8]
+        return ProjectConfig(
+            name=f"inline-{token_hash}",
+            project_id=project_id,
+            git_token=git_token,
+        )
     return get_project_config(project_name)

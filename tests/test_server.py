@@ -4,7 +4,13 @@ from overleaf_mcp.config import resolve_project, ProjectConfig
 
 
 def test_resolve_project_inline_credentials():
-    """Inline git_token + project_id should bypass config lookup."""
+    """Inline git_token + project_id should bypass config lookup.
+
+    The name is tagged with an 8-hex-char SHA-256 prefix of the token so
+    concurrent inline callers are distinguishable in logs. The prefix
+    is derived from the token but is one-way, so the token itself never
+    appears in the name.
+    """
     result = resolve_project(
         project_name=None,
         git_token="tok_inline",
@@ -12,7 +18,10 @@ def test_resolve_project_inline_credentials():
     )
     assert result.git_token == "tok_inline"
     assert result.project_id == "proj_inline"
-    assert result.name == "inline"
+    # Shape: "inline-" + 8 hex chars. Not the token itself.
+    assert result.name.startswith("inline-")
+    assert len(result.name) == len("inline-") + 8
+    assert "tok_inline" not in result.name
 
 
 def test_resolve_project_inline_requires_both():
