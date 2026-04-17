@@ -27,6 +27,16 @@ dev = [
     "bandit>=1.7.0",
     "mypy>=1.10.0",
 ]
+# Docs toolchain — installed with `uv sync --extra docs`. Kept separate
+# from `dev` so CI test runs don't pull in the Sphinx toolchain.
+docs = [
+    "sphinx>=7.3.0",
+    "furo>=2024.5.6",
+    "myst-parser>=3.0.0",
+    "sphinx-copybutton>=0.5.2",
+    "sphinx-design>=0.6.0",
+    "sphinx-autobuild>=2024.4.16",
+]
 
 [project.scripts]
 overleaf-mcp = "overleaf_mcp.server:main"
