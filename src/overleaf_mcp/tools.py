@@ -51,6 +51,13 @@ def _decode_msg(msg: str | bytes) -> str:
     whichever encoding the commit object used). Formatting bytes in an
     f-string produces literal ``b'...'`` text in the response, which is
     a real bug that slipped through before mypy --strict caught it.
+
+    Decoding uses ``errors="replace"`` — any non-UTF-8 byte is emitted
+    as U+FFFD (``�``). This keeps the tool response readable on commit
+    messages authored with legacy encodings; the tradeoff is that a
+    malformed byte silently turns into a replacement character rather
+    than raising. Callers inspecting the output should not treat it as
+    a faithful round-trip of the original bytes.
     """
     return msg if isinstance(msg, str) else msg.decode("utf-8", errors="replace")
 
@@ -71,8 +78,8 @@ _DryRun = Annotated[
     bool,
     Field(
         description=(
-            "If true, report what would happen without making changes "
-            "(default: false)"
+            "If true, preview the change without writing (default: false). "
+            "Still pulls; skips write/commit/push only."
         )
     ),
 ]
