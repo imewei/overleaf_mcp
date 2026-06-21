@@ -4,7 +4,7 @@ Installation
 Prerequisites
 -------------
 
-- **Python 3.10+** (tested on 3.10, 3.11, 3.12, 3.13)
+- **Python 3.10+** (tested on 3.10, 3.11, 3.12, 3.13, 3.14)
 - **Git** (GitPython shells out to the system binary — no binary is bundled)
 - An **Overleaf account with Git integration enabled** (requires a paid plan)
 
@@ -33,8 +33,10 @@ Install from source (uv — recommended)
     uv sync --extra dev              # + test / lint / type-check tools
     uv sync --extra docs             # + Sphinx toolchain (this site)
 
-The ``uv.lock`` file is the single source of truth — CI uses the same
-lockfile, so ``uv sync`` produces a byte-identical environment.
+``uv sync`` resolves from ``pyproject.toml``. The ``uv.lock`` file is
+``.gitignore``\d in this repo (CI resolves fresh on each run); if you
+need byte-identical environments across machines, pin exact versions in
+``pyproject.toml`` or check in ``uv.lock`` locally.
 
 Install as an MCPB bundle (Claude Desktop)
 -------------------------------------------

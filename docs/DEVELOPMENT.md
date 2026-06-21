@@ -4,7 +4,7 @@ Everything you need to hack on this server locally.
 
 ## Prerequisites
 
-- **Python 3.10+** (tested on 3.10, 3.11, 3.12, 3.13)
+- **Python 3.10+** (tested on 3.10, 3.11, 3.12, 3.13, 3.14)
 - **Git** (GitPython shells out; we do not bundle a binary)
 - **`uv`** (recommended) — resolves and installs against `pyproject.toml`
   faster than pip and produces a deterministic environment via `uv sync`.

@@ -4,6 +4,29 @@ All notable changes to this project. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Python 3.14 CI coverage** — added `"3.14"` to the Ubuntu test matrix
+  in `.github/workflows/ci.yml` so every push/PR runs against Python 3.14.
+- **Python version classifiers** in `pyproject.toml` — explicitly declares
+  `Programming Language :: Python :: 3.10` through `3.14` so PyPI and
+  packaging tools reflect the tested range.
+
+### Maintenance
+
+- Removed accidental commits of graphify working-state files
+  (`.graphify_ast.json`, `.graphify_detect.json`, `graphify_uncached.txt`,
+  `graphify-out/.graphify_python`) introduced in `eb8166d`.
+- Deleted stray one-shot scripts (`extract.py`, `generate_graph.py`) and
+  temp directory (`tmp_figs/`) that were never part of the package.
+- Extended `.gitignore` with broader patterns (`graphify-out/.graphify_*`,
+  `.graphify_*`) to prevent future build-state pollution regardless of
+  file extension.
+
+---
+
 ## [1.1.0] — 2026-04-16
 
 The "agent-grade hardening" release. Focus: concurrency, latency,
