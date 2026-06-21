@@ -1,0 +1,162 @@
+{
+  "/Users/b80985/Projects/overleaf_mcp/mcpb/bootstrap.py": {
+    "mtime": 1776454714.567714,
+    "hash": "945e445006d7944b23f339b32b0b0af4"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/tests/test_optimizations.py": {
+    "mtime": 1776456453.0540383,
+    "hash": "0d0936989ebfe9120fb192dd4ac34115"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/tests/test_server_transport.py": {
+    "mtime": 1776454714.568689,
+    "hash": "0be973361de9725a17cf5c5c61b683e2"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/tests/test_mcpb_bundle.py": {
+    "mtime": 1776454714.5684626,
+    "hash": "88dbaeb5653679ed9c6292ad97408928"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/tests/test_server.py": {
+    "mtime": 1776454714.5686123,
+    "hash": "22d4aeee86079b2609587283137d3067"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/tests/test_dispatcher.py": {
+    "mtime": 1776454714.5683784,
+    "hash": "77c7e993d0caa9665c93ab0d4d41f1fe"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/tests/test_coverage_gaps.py": {
+    "mtime": 1776454714.5682993,
+    "hash": "daa8d9296bf47ac725d4b96cbb43dc18"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/conf.py": {
+    "mtime": 1776454733.8897297,
+    "hash": "9e562c68a19a22e5d65570670735368f"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/src/overleaf_mcp/server.py": {
+    "mtime": 1776454714.5681229,
+    "hash": "866db29fc5e6b5ea6f0aade59dac7745"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/src/overleaf_mcp/config.py": {
+    "mtime": 1776454714.5678072,
+    "hash": "eea75aa90a4e1df43bc79df522729fef"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/src/overleaf_mcp/git_ops.py": {
+    "mtime": 1776456094.9385493,
+    "hash": "d4f304e81f224efe33940a2735e2c03f"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/src/overleaf_mcp/tools.py": {
+    "mtime": 1776454714.568202,
+    "hash": "ffd9ce1315bac7406126604e9180a359"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/src/overleaf_mcp/__init__.py": {
+    "mtime": 1776367031.8886485,
+    "hash": "7d0c79d8a991f8e88026afb76a58dba4"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/src/overleaf_mcp/latex.py": {
+    "mtime": 1776454714.5680323,
+    "hash": "5cd2aae354e93b32ead3e1f29d07fb30"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/CHANGELOG.md": {
+    "mtime": 1776367347.9569318,
+    "hash": "9bb0db5885b30f13e5742f6d68db49d0"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/graphify_uncached.txt": {
+    "mtime": 1778100477.4194646,
+    "hash": "ddc2723d5625ba10b2ad2e40689ad42e"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/README.md": {
+    "mtime": 1776435982.970496,
+    "hash": "982e32cad980dd6113990706a4a0a268"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/ARCHITECTURE.md": {
+    "mtime": 1776367249.7012215,
+    "hash": "878774b3c39ffd58dae4eb542911032a"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/API.md": {
+    "mtime": 1776415316.256529,
+    "hash": "fd209c681165e3df6c7377bf93e81cf9"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/DEVELOPMENT.md": {
+    "mtime": 1776454733.8896506,
+    "hash": "cc39a7486027495a472b5e25b467fc00"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/index.rst": {
+    "mtime": 1776416476.900996,
+    "hash": "333ad2b4166657dafdf619fbbbb487b4"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/client_setup.rst": {
+    "mtime": 1776416570.319811,
+    "hash": "27ef416d403ac79cf5bff14888e1faf2"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/configuration.rst": {
+    "mtime": 1776416543.8126502,
+    "hash": "79cbb4a291961509f84ca1990c85f017"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/tools.rst": {
+    "mtime": 1776454733.889891,
+    "hash": "a664810c4786374d7a6cded216049d71"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/usage.rst": {
+    "mtime": 1776417058.2734547,
+    "hash": "fe835b7b8ff541dccd438c5964103646"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/development.rst": {
+    "mtime": 1776454733.889802,
+    "hash": "731c877335e1aef7a78f028516863719"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/quickstart.rst": {
+    "mtime": 1776435971.40259,
+    "hash": "13c0dec16e5166949816c3c1a8ba33a2"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/installation.rst": {
+    "mtime": 1776435974.4224849,
+    "hash": "ff9343b39c22f3fdd1f754b4de679c42"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/environment.rst": {
+    "mtime": 1776416637.2812638,
+    "hash": "b8f291691b27452895b5a59bf327d4fc"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/changelog.rst": {
+    "mtime": 1776416903.0738945,
+    "hash": "36cacff8d63bebbd00f239b8c3eb139f"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/architecture.rst": {
+    "mtime": 1776416768.5255048,
+    "hash": "08401d119cf6eebea2647eb00785d3c7"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/api/server.rst": {
+    "mtime": 1776416655.3158402,
+    "hash": "0c0a994111d1c33076ac2518f74fd9e8"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/api/git_ops.rst": {
+    "mtime": 1776416668.3736663,
+    "hash": "b97ff511b61c5b93635bdb6d3d4909ff"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/api/index.rst": {
+    "mtime": 1776417177.627957,
+    "hash": "494fcdf63ba117ea5ffe0b0193f6f575"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/api/tools.rst": {
+    "mtime": 1776416980.35813,
+    "hash": "f0d2ea13a9c0f4ef60ddec4ce4752288"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/api/config.rst": {
+    "mtime": 1776416673.170134,
+    "hash": "301671fe5d32751c981766b0d97fcac5"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/docs/source/api/latex.rst": {
+    "mtime": 1776416678.07536,
+    "hash": "df32aaec78c9f2bb0398bde11d8c48c7"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/overleaf_cache/698ad5af6f65e17261346c20/Figures/XPCS_Fig1.jpg": {
+    "mtime": 1776448349.041211,
+    "hash": "cefb41e7cdf5ba5404f1f60fe1c21344"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/overleaf_cache/698ad5af6f65e17261346c20/Figures/XPCS_Fig3.jpg": {
+    "mtime": 1776448349.043303,
+    "hash": "bfb3e97c873452dd5313d1d120bdb598"
+  },
+  "/Users/b80985/Projects/overleaf_mcp/overleaf_cache/698ad5af6f65e17261346c20/Figures/XPCS_Fig2.jpg": {
+    "mtime": 1776448349.0427032,
+    "hash": "cd8064a78a314ce299bf92ebcd945da1"
+  }
+}
