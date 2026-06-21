@@ -69,7 +69,8 @@ graphify-out/cache/
 docs/.claude-progress.md
 
 # Graphify internal working state files
-graphify-out/.graphify_*.json
-graphify-out/.graphify_*.txt
+graphify-out/.graphify_*
+graphify_uncached.txt
+.graphify_*
 graphify-out/.obsidian/
 graphify-out/_COMMUNITY_*.md
