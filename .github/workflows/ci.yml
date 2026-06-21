@@ -52,7 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         # Cross-platform smoke: one version on macOS + Windows to catch
         # path / line-ending issues without quadrupling CI minutes.
         # Pinned to 3.13 to match the developer's local interpreter.
